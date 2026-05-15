@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from dotenv import find_dotenv, load_dotenv
 
-DEFAULT_MODEL = "deepseek/deepseek-chat"
+DEFAULT_MODEL = "deepseek/deepseek-v4-flash"
 
 
 class MissingAPIKeyError(Exception):

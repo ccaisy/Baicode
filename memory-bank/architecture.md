@@ -8,7 +8,7 @@
 
 | 路径 | 作用 |
 | --- | --- |
-| `pyproject.toml` | 包元信息（name=`cagent`、`requires-python>=3.10`）、依赖（`python-dotenv` / `prompt_toolkit` / `rich` / `litellm` / `tavily-python`）、`[project.scripts] cagent = "cagent.cli:main"` 入口、`tool.setuptools.packages.find` 配 src 布局 |
+| `pyproject.toml` | 包元信息（name=`cagent`、`requires-python>=3.10`）、依赖（`python-dotenv` / `prompt_toolkit` / `rich` / `litellm` / `tavily-python` / `langgraph`）、`[project.scripts] cagent = "cagent.cli:main"` 入口、`tool.setuptools.packages.find` 配 src 布局 |
 | `.env` | 本地真实 Key（**已 .gitignore**） |
 | `.env.example` | 配置模板，列出 `DEEPSEEK_API_KEY` / `TAVILY_API_KEY` / `OPENAI_API_KEY` |
 | `.gitignore` | macOS / Python 工件 + `.env` + `.workspace/`（Phase 2 工具执行临时区） |
@@ -34,7 +34,7 @@
 
 | 名字 | 类型 | 作用 |
 | --- | --- | --- |
-| `DEFAULT_MODEL` | `str` 常量 | `"deepseek/deepseek-chat"` |
+| `DEFAULT_MODEL` | `str` 常量 | `"deepseek/deepseek-v4-flash"`（thinking-mode；详见 progress 偏离 3） |
 | `Config` | `@dataclass(frozen=True)` | 不可变配置容器；字段 `deepseek_api_key` / `tavily_api_key` / `openai_api_key` / `default_model` |
 | `MissingAPIKeyError` | `Exception` 子类 | 携带 `.key_name` 字段，方便上层差异化提示 |
 | `load_config()` | `() -> Config` | 调 `dotenv.find_dotenv(usecwd=True)` 从 CWD 向上递归找 `.env`；缺必需 Key 立即抛异常 |
@@ -56,7 +56,7 @@
 | --- | --- | --- |
 | `ChatError` | `Exception` | **可恢复**：限流耗尽、网络瞬时、通用错误。上层捕获后 REPL 继续 |
 | `FatalAuthError` | `Exception` | **不可恢复**：鉴权失败。上层 `sys.exit(1)` |
-| `chat(messages, config=None, tools=None) -> dict` | 单次模型调用 | 返回 `{"role": "assistant", "content": str, "tool_calls": Optional[list]}` |
+| `chat(messages, config=None, tools=None) -> dict` | 单次模型调用 | 返回 `{"role": "assistant", "content": str, "tool_calls": Optional[list], "reasoning_content": Optional[str]}`。**`reasoning_content` 是 thinking-mode 模型的链式思考；多轮调用必须回传，否则 DeepSeek 报 BadRequest（progress 偏离 3）。非推理模型该字段为 `None`** |
 | `_looks_like_auth_error(exc)` | 私有 helper | 关键字嗅探兜底鉴权错误（DeepSeek 把 401 包成 `BadRequestError` 的边界场景） |
 
 #### llm.py 关键约定
@@ -91,7 +91,7 @@
 | --- | --- | --- |
 | `main()` | `() -> None` | `pyproject.toml [project.scripts] cagent` 注册的入口函数 |
 | `render_typewriter(text, console, style, delay)` | 渲染器 | 用 Rich `Live + Text` 模拟逐字打字机。`Text.append(ch)` 而不是 markup，**避免被用户/模型字串里的方括号注入** |
-| `SYSTEM_PROMPT` | `str` 常量 | 系统提示词；当前仅为简短角色设定，Phase 3 接入工具时需要扩写 |
+| `_SYSTEM_PROMPT_TEMPLATE` / `_build_system_prompt()` | `str` / `() -> str` | 模板含 `{today}` 占位符；启动时 `date.today().isoformat()` 注入（每次 `cagent` 启动重算，**明年用是明年的日期**）。模板内嵌：禁止使用训练记忆中具体日期/数字；`web_search` 不是结构化数据 API（天气/股价/航班/汇率遇到直接告知能力受限）；工具调用预算 5 次用完就停 |
 | `HISTORY_PATH` | `str` 常量 | `~/.cagent_history` |
 
 #### cli.py 启动流程
@@ -101,7 +101,7 @@
 3. `load_config()` — 缺 Key 走 `MissingAPIKeyError` 红字退出。
 4. 打印 banner（model 名 + 操作提示）。
 5. 创建 `PromptSession(multiline=True, history=FileHistory(HISTORY_PATH))`。
-6. 初始化 `messages = [{"role": "system", "content": SYSTEM_PROMPT}]`。
+6. 初始化 `messages = [{"role": "system", "content": _build_system_prompt()}]`。
 7. 进入 `while True` 主循环。
 
 #### cli.py 主循环单步
@@ -109,11 +109,12 @@
 ```text
 user_input  ──► strip / 空串跳过
             ──► messages.append({"role": "user", ...})
-            ──► console.status("thinking...", spinner_style="cyan")
-            ──► llm.chat(messages, config)
-            ──► render_typewriter(content, style="green")
-            ──► messages.append({"role": "assistant", ...})
+            ──► graph.builder.run(messages)         # Phase 3 起：整张状态机
+            ──► messages = updated_messages          # 用图返回的完整序列覆盖
+            ──► render_typewriter(last.content, style="green")
 ```
+
+`thinking...` (dim cyan) 与 `Running tool...` (yellow) 两个 Spinner 都已迁入 `graph/nodes.py` 内部，cli 端不再持有。
 
 #### cli.py 异常处理矩阵
 
@@ -121,7 +122,10 @@ user_input  ──► strip / 空串跳过
 | --- | --- |
 | 顶层 `KeyboardInterrupt` / `EOFError` | 打印"再见。" + `return` |
 | `FatalAuthError` | 红字 + `sys.exit(1)` |
-| `ChatError` | 红字提示 + 弹出最后一条 user 消息（**保证 messages 序列洁净，下次重试不带脏数据**）+ `continue` |
+| `ChatError` | 红字提示 + `messages.pop()`（弹 user 保持序列洁净）+ `continue` |
+| `ReflectionRetriesExceeded` | 红字 + `messages.pop()` + `continue`（工具失败 ≥ retry_limit） |
+| `ToolCallBudgetExceeded` | 红字 + `messages.pop()` + `continue`（工具调用 ≥ max_tool_calls 仍想调） |
+| 图执行期间 `KeyboardInterrupt` | 红字 + `messages.pop()` + `continue` |
 | 渲染期间 `KeyboardInterrupt` | 仅打一个换行收尾 |
 
 #### cli.py 颜色规范（落实 implement_plan §0.4）
@@ -136,7 +140,7 @@ user_input  ──► strip / 空串跳过
 
 #### cli.py 依赖关系
 
-- 上游依赖：`prompt_toolkit` + `rich` + `config` + `llm`。
+- 上游依赖：`prompt_toolkit` + `rich` + `datetime` + `config` + `llm` + `graph.builder`。
 - 被谁调：`pyproject.toml` 的 `cagent` 入口、`python -m cagent.cli`。
 
 ---
@@ -177,26 +181,27 @@ user_input  ──► strip / 空串跳过
 
 ### 2.7 `tools/web_search.py` — Tavily 网络搜索
 
-**角色**：用 Tavily 拉取 Top-3 高相关结果，拼成单一字符串回传。**纯净、无状态**。
+**角色**：用 Tavily 拉取 Top-5 高相关结果，拼成单一字符串回传。**纯净、无状态**。
 
 #### web_search.py 关键导出
 
 | 名字 | 类型 | 作用 |
 | --- | --- | --- |
 | `MAX_CHARS` | `int = 4000` | 输出硬截断阈值，护栏 LLM 上下文 |
-| `TOP_K` | `int = 3` | Tavily `max_results` |
-| `web_search(query) -> str` | 单次搜索入口 | 返回 `"[url]\ncontent\n\n[url]\ncontent\n..."` 形式字符串，整体 ≤ 4000 字符 |
+| `TOP_K` | `int = 5` | Tavily `max_results` |
+| `web_search(query, topic="general", days=30) -> str` | 单次搜索入口 | 返回 `"[url] (published_date)\ncontent\n..."` 形式字符串，整体 ≤ 4000 字符 |
 
 #### web_search.py 行为约定
 
-- 每次调用 `load_config()` 拿 `TAVILY_API_KEY`，新建 `TavilyClient(api_key=...)`。MVP 阶段调用频率低、不做 client 缓存；Phase 3 看实际开销再决定是否 `functools.lru_cache`。
-- Tavily 异常**当前未做包装**：tavily-python 抛出的鉴权 / 网络异常将直接冒泡到 `tool_node`，由 Phase 3 的节点层决定是否走反思路径。
-- 截断采用朴素 `text[:MAX_CHARS]`，**可能切在 UTF-8 字符中**——MVP 风险可接受，因为模型容错 + 后续会读上下文重新搜索。
+- 每次调用 `load_config()` 拿 `TAVILY_API_KEY`，新建 `TavilyClient(api_key=...)`。MVP 阶段调用频率低、不做 client 缓存。
+- **`topic="news"` 时才传 Tavily 的 `topic` + `days` 字段**；默认 `general` 适用 docs/wiki/技术内容。schema 让模型自己选（progress 偏离 4）。
+- Tavily 异常**未做包装**，直接冒泡到 `tool_node`，由节点层 `except Exception` 兜底（`error_count++`）。
+- 截断采用朴素 `text[:MAX_CHARS]`，可能切在 UTF-8 字符中——MVP 风险可接受。
 
 #### web_search.py 依赖关系
 
 - 上游依赖：`tavily` (`tavily-python` 包) + `cagent.config.load_config`。
-- 被谁调：Phase 3 `graph/nodes.py::tool_node`。
+- 被谁调：`graph/nodes.py::tool_node`。
 
 ---
 
@@ -209,7 +214,7 @@ user_input  ──► strip / 空串跳过
 | 名字 | 类型 | 作用 |
 | --- | --- | --- |
 | `PYTHON_EXEC_SCHEMA` | `dict` | OpenAI function calling schema，`function.name="python_exec"`，参数 `code: string (required)` |
-| `WEB_SEARCH_SCHEMA` | `dict` | 同上，`function.name="web_search"`，参数 `query: string (required)` |
+| `WEB_SEARCH_SCHEMA` | `dict` | `function.name="web_search"`，参数 `query: string (required)` + `topic: enum["general","news"]` + `days: integer`。description 中明令"时效问题 MUST set topic='news'" |
 | `ALL_SCHEMAS` | `list[dict]` | `[PYTHON_EXEC_SCHEMA, WEB_SEARCH_SCHEMA]` |
 
 #### schemas.py 行为约定
@@ -221,6 +226,81 @@ user_input  ──► strip / 空串跳过
 
 - 上游依赖：无（纯数据）。
 - 被谁调：Phase 3 `graph/nodes.py::agent_node` 调 `llm.chat(tools=ALL_SCHEMAS)`。
+
+---
+
+### 2.9 `graph/__init__.py`
+
+包占位，不导出符号。
+
+---
+
+### 2.10 `graph/state.py` — AgentState 定义
+
+**角色**：LangGraph 节点间流转的 `TypedDict`。
+
+| 字段 | 类型 | 由谁初始化 | 含义 |
+| --- | --- | --- | --- |
+| `messages` | `list` | `builder.run` | 完整对话序列（含 assistant.tool_calls / role="tool" 结果 / reasoning_content） |
+| `error_count` | `int` | `builder.run`（=0） | 当轮 user 内累计的工具失败次数（仅在 `python_exec.stderr` 非空 / tool 抛异常时 ++） |
+| `retry_limit` | `int` | `builder.run`（=3） | `error_count >= retry_limit` → `ReflectionRetriesExceeded` |
+| `tool_calls_count` | `int` | `builder.run`（=0） | 当轮 user 内 `tool_node` 被调用的总次数（按节点 +1，不按子调用） |
+| `max_tool_calls` | `int` | `builder.run`（=5） | `tool_calls_count >= max_tool_calls` 且模型仍想调工具 → `ToolCallBudgetExceeded` |
+
+---
+
+### 2.11 `graph/nodes.py` — agent_node + tool_node（手写 ReAct + Reflection）
+
+#### nodes.py 关键导出
+
+| 名字 | 签名 | 作用 |
+| --- | --- | --- |
+| `agent_node(state) -> dict` | LangGraph 节点 | `Console.status("thinking...", style=dim cyan)` + `chat(messages, tools=ALL_SCHEMAS)` → assistant message（含 `reasoning_content` / `tool_calls` 时一并写入） |
+| `tool_node(state) -> dict` | LangGraph 节点 | `Console.status("Running tool...", style=yellow)` + 按 `function.name` 分发 `python_exec` / `web_search`；Observation 静默；`tool_calls_count` 末尾 +1 |
+| `_normalize_tool_calls(tool_calls)` | 私有 helper | 把 LiteLLM 的 pydantic `ChatCompletionMessageToolCall` 列表转成 dict 列表，**确保下次调用 LiteLLM 时格式合法** |
+
+#### nodes.py 行为约定
+
+- `python_exec`：`stderr` 非空 → `error_count++` + content 用反思格式（`Execution failed (returncode=...).\nCode:\n\`\`\`python\n{code}\n\`\`\`\nStderr:\n...\nStdout:\n...`）。
+- `web_search`：把 `args.get("topic", "general")` 与 `args.get("days", 30)` 透传给工具函数；异常不走反思（直接 `except Exception` → `error_count++`）。
+- JSON 解析失败：`json.JSONDecodeError` → `error_count++` + 回填错误提示，**不中断循环**（多 tool_call 场景仍能处理后续调用）。
+- `KeyboardInterrupt`（implement_plan §0.5 落实点）：当前 tool_call 回填 `"Tool execution interrupted by user."`；后续所有 tool_call 回填 `"Tool execution skipped due to earlier interrupt."`；`break` 跳出循环；**不冒泡，REPL 保持存活**。子进程的 kill 由 `subprocess.run` 自身完成。
+- 模块顶部 `_console = Console()` 单例；与 `cli.py` 的 Console 不同实例但同写 stdout，Rich 内部安全。
+
+#### nodes.py 依赖关系
+
+- 上游依赖：`rich.console.Console` + `cagent.llm.chat` + `cagent.tools.{python_exec, web_search, schemas}`。
+- 被谁调：`graph.builder.build_graph()` 注册为 `"agent"` / `"tool"` 节点。
+
+---
+
+### 2.12 `graph/builder.py` — 图构建 + 条件边路由 + REPL 入口
+
+#### builder.py 关键导出
+
+| 名字 | 类型 / 签名 | 作用 |
+| --- | --- | --- |
+| `ReflectionRetriesExceeded` | `RuntimeError` 子类 | 工具失败 ≥ `retry_limit` |
+| `ToolCallBudgetExceeded` | `RuntimeError` 子类 | 工具调用 ≥ `max_tool_calls` 且模型仍想调 |
+| `build_graph()` | `() -> CompiledGraph` | 装 `START → agent` + 两组条件边；模块外**不需要**自己持有图实例（`run()` 内部每次新建，开销小） |
+| `run(messages, retry_limit=3, max_tool_calls=5)` | REPL 入口 | 执行整张图、检查 final state、抛超限异常或返回完整 messages |
+
+#### builder.py 图结构
+
+```text
+START ──► agent ──┬──► tool ──┬──► agent      (常规 ReAct 回路)
+                  │            └──► END       (error_count ≥ retry_limit → exceeded)
+                  ├──► END                    (last 无 tool_calls → 自然收尾)
+                  └──► END                    (last 有 tool_calls 但 tool_calls_count ≥ max → exceeded)
+```
+
+- 路由函数 `_route_after_agent` 返回 `"tool"` / `"end"` / `"exceeded"`；`_route_after_tool` 返回 `"agent"` / `"exceeded"`；`"exceeded"` 与 `"end"` 都映射到 `END`，由 `run()` 事后检查 state 区分。
+- `_RECURSION_LIMIT = 50` 防止 LangGraph 死循环兜底；正常情况下 `retry_limit` / `max_tool_calls` 会先触发。
+
+#### builder.py 依赖关系
+
+- 上游依赖：`langgraph.graph.StateGraph` + `cagent.graph.{nodes, state}`。
+- 被谁调：`cli.py::main()` 主循环。
 
 ---
 
@@ -238,38 +318,36 @@ user_input  ──► strip / 空串跳过
 ## 4. 调用方向（依赖图）
 
 ```text
-                  ┌──────────────┐
-                  │  cli.main()  │  入口（Phase 1）
-                  └──────┬───────┘
-                         │
-        ┌────────────────┼─────────────────────┐
-        ▼                ▼                     ▼
-  config.load_config   llm.chat        cli.render_typewriter
-        │                │                     │
-        ▼                ▼                     ▼
-   python-dotenv     litellm                rich (Live + Text)
-                        │
-                        ▼
-                  config.load_config
+                ┌──────────────┐
+                │  cli.main()  │  入口
+                └──────┬───────┘
+                       │ messages.append(user)
+                       ▼
+              graph.builder.run(messages, retry_limit=3, max_tool_calls=5)
+                       │
+                       ▼
+          ┌─────────  StateGraph  ─────────┐
+          │                                 │
+          ▼                                 ▼
+   agent_node (chat + tools=ALL_SCHEMAS)    tool_node (python_exec | web_search)
+          │                                 │
+          ▼                                 ▼
+        llm.chat                       tools.python_exec.run_python
+       (litellm)                       tools.web_search.web_search
+                                       (tavily-python + config.load_config)
 
-  // Phase 2（已落地，目前为孤岛，待 Phase 3 graph/nodes 接入）
-  tools.python_exec.run_python  ──► subprocess + .workspace/temp_exec.py
-  tools.web_search.web_search   ──► tavily-python + config.load_config
-  tools.schemas.ALL_SCHEMAS     ──► （纯数据，无运行时依赖）
+                       │ updated_messages
+                       ▼
+              cli.render_typewriter (rich Live + Text)
 ```
 
 - **单向依赖、无环**。
-- `prompt_toolkit` / `rich` / `litellm` / `tavily` 都是叶子依赖，彼此不互相调用。
-- Phase 2 工具层目前**未被 cli.py 调用**，是为 Phase 3 准备的孤岛模块。
-- Phase 3 引入 `graph/builder` 后，调用链将变为：`cli.main → graph.builder.run(state) → graph.nodes.{agent_node, tool_node} → llm.chat / tools.*`。
+- `cli` 持有 `messages` 主权，每轮 user 后调 `graph_run` 拿回完整序列并覆盖。
+- `prompt_toolkit` / `rich` / `litellm` / `tavily` / `langgraph` 均为叶子依赖。
+- Phase 2 工具层 + Phase 3 图层闭环：`cli.main → graph.builder.run → graph.nodes.{agent,tool}_node → llm.chat / tools.*`。
 
 ---
 
-## 5. 待添加文件（按 implement_plan 顺序）
+## 5. 待添加文件
 
-| 路径 | 由哪个 Step 产出 | 角色草案 |
-| --- | --- | --- |
-| `src/cagent/graph/__init__.py` | Step 6 | 包占位 |
-| `src/cagent/graph/state.py` | Step 6 | `AgentState (TypedDict)`：messages / error_count / retry_limit |
-| `src/cagent/graph/nodes.py` | Step 6-8 | `agent_node` / `tool_node`（手写，**禁用 prebuilt ToolNode**） |
-| `src/cagent/graph/builder.py` | Step 6-7 | LangGraph 图构建 + 条件边路由 |
+Phase 1-3 落地后，**implement_plan §0.1 列出的所有源码文件均已就位**。Phase 4 仅做产品化封装（`pip install -e .` 已可用、`pyproject.toml [project.scripts]` 已注册），不引入新代码文件。

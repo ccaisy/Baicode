@@ -168,15 +168,80 @@ cagent
 
 ---
 
-## Phase 3 ~ 4 — 未开始
+## Phase 3: 工作流状态机 + ReAct + Reflection — ✅ 完成于 2026-05-16
+
+### Step 6-8 一并落地 — ✅
+
+#### Phase 3 落地文件
+
+- `src/cagent/graph/__init__.py`（占位）
+- `src/cagent/graph/state.py`：`AgentState` TypedDict，字段 `messages` / `error_count` / `retry_limit` / `tool_calls_count` / `max_tool_calls`
+- `src/cagent/graph/nodes.py`：手写 `agent_node` + `tool_node`（禁用 prebuilt `ToolNode` / `create_react_agent`）；`_normalize_tool_calls` 把 LiteLLM 的 pydantic tool_calls 转成 dict 列表
+- `src/cagent/graph/builder.py`：`build_graph()` + `run(messages, retry_limit=3, max_tool_calls=5)`；异常 `ReflectionRetriesExceeded` / `ToolCallBudgetExceeded`；`_RECURSION_LIMIT=50`
+- `src/cagent/cli.py`：主循环切到 `graph_run(messages)`；新增两个异常分支；`SYSTEM_PROMPT` 改成 `_build_system_prompt()` 启动时注入 `date.today()`
+- `pyproject.toml` 新增 `langgraph>=0.2.0`
+
+#### Phase 3 关键设计点
+
+- **agent_node**：`Console.status("thinking...", style=dim cyan)` + `chat(messages, tools=ALL_SCHEMAS)`；把 `reasoning_content` 与 `tool_calls` 一同写入 assistant message。
+- **tool_node**：`Console.status("Running tool...", style=yellow)` + 按 `function.name` 分发 `python_exec` / `web_search`；Observation 静默不打印；`python_exec` 的 `stderr` 非空 → `error_count++` + 反思格式 content；任何 tool 异常 → `error_count++`；`KeyboardInterrupt` → 回填 `"Tool execution interrupted by user."` 并把剩余 tool_calls 标 `"skipped due to earlier interrupt"`；节点末尾 `tool_calls_count += 1`。
+- **条件边**：
+  - `agent → tool` 当 `last.tool_calls` 非空且 `tool_calls_count < max_tool_calls`；否则 → `END`（自然收尾）或 `exceeded`（仍想调工具但预算耗尽）。
+  - `tool → agent`，但 `error_count >= retry_limit` → `exceeded`。
+- **超限语义**：`exceeded` 路由到 `END` 后 `run()` 检测并抛 `ReflectionRetriesExceeded` 或 `ToolCallBudgetExceeded`；REPL 红字 + `messages.pop()` 回到提示符。
+
+#### Phase 3 测试证据（脚本绕过 REPL 直调 `graph.builder.run`）
+
+- ✅ 简单对话不调工具（"请只回复两个字：你好"）。
+- ✅ 算术触发 `python_exec` 一次成功（1234567×7654321 = 9449772114007）。
+- ✅ 反思自愈（除零 → tool 报错 → 修复 → 成功）。
+- ✅ `retry_limit` 红线：mock `run_python` 永远失败 → 3 次后抛 `ReflectionRetriesExceeded`。
+- ✅ Ctrl+C 内层：mock `run_python` 抛 `KeyboardInterrupt` → tool_node 不冒泡，回填 Observation。
+- ✅ `max_tool_calls` 硬兜底：mock chat 死磕调工具 → 5 次后抛 `ToolCallBudgetExceeded`。
+- ✅ 用户已在 REPL 手动验证多 case 顺手。
+
+### Phase 3 偏离 implement_plan 的决策记录
+
+#### 偏离 3：默认模型切到 `deepseek-v4-flash`
+
+- **起因**：implement_plan §0.2 与 Phase 1 的 `DEFAULT_MODEL` 是 `deepseek/deepseek-chat`；用户切到 `deepseek/deepseek-v4-flash` 以获取推理能力。
+- **影响**：v4-flash 是 thinking-mode 模型，响应额外带 `reasoning_content`；多轮调用时该字段**必须回传**，否则 DeepSeek 返回 `BadRequestError: "The reasoning_content in the thinking mode must be passed back to the API."`。
+- **修复**：`llm.chat()` 用 `getattr(msg, "reasoning_content", None)` 把字段读出来挂在返回 dict；`agent_node` 把它写进 assistant message。非推理模型字段为 `None` 自动跳过，**向后兼容 `deepseek-chat`**。
+
+#### 偏离 4：`web_search` 扩展 + SYSTEM_PROMPT 动态化与强化
+
+implement_plan 原本只要求 `web_search(query)` + Top-3 + 4000 字硬截断。实际使用中暴露两个问题：
+
+1. 时效问题（如"ChatGPT 最新模型"）返回旧综述，模型用训练记忆脑补具体日期/版本号。
+2. 不可搜场景（如"明天北京天气"）模型反复换 query 死循环。
+
+修复（4 处一并）：
+
+| 维度 | 改动 |
+| --- | --- |
+| 工具签名 | `web_search(query, topic="general", days=30)`；`TOP_K=5`；只在 `topic="news"` 时传 Tavily 的 `topic` / `days`；输出每条带 `(published_date)` 标记 |
+| schemas | `WEB_SEARCH_SCHEMA` 增 `topic` (enum: general/news) 与 `days` 可选字段 |
+| SYSTEM_PROMPT | 启动时 `date.today().isoformat()` 注入；新增「禁止使用训练记忆中具体日期/数字」「web_search 不是结构化数据 API（天气/股价/航班/汇率等遇到直接告知能力受限、不要循环搜）」「工具调用预算 5 次用完就停」三段约束 |
+| 兜底 | `max_tool_calls=5` 在图层硬截断，模型即便不遵守 prompt 也会被路由层踢出 |
+
+效果：「明天北京天气怎么样？」从无限 thinking↔tooling 死循环变为 0 次工具调用、3.5s 给出"能力受限 + 替代方案"答复。
+
+---
+
+## 运行说明（保持不变）
+
+参见上文"运行说明（保留给后续接手者）"。`cagent` 首次运行时 `.workspace/` 会在当前 CWD 自动创建。
+
+---
+
+## Phase 4 — 未开始
 
 ### 下一步入口
 
-Step 6：搭建 `src/cagent/graph/` 三件套（`state.py` 落地 `AgentState`，`nodes.py` 实现 `agent_node`，`builder.py` 构建最小图 `START → agent_node → END`），并将 `cli.py` 主循环切换为图调用。
+Step 9：产品化封装。`pyproject.toml` 的 `[project.scripts] cagent = "cagent.cli:main"` 与 `pip install -e .` 已在 Phase 1-3 期间反复验证可用；剩下的事仅是新开终端跑一遍完整 ReAct+反思流程做最后冒烟。implement_plan §0.2 提到的 Typer 改造**已被实践证明不必要**（直接 `def main()` + entry_points 即可），可保留现状。
 
 ### 接手者请先做的事
 
-1. 阅读 `memory-bank/implement_plan.md` §0 全局决策、Step 6-8 详细要求（重点：禁用 `create_react_agent` / `ToolNode`，手写节点）。
-2. 阅读本文件"偏离 implement_plan 的两处记录"理解既有兜底；Phase 2 自身无偏离。
-3. 阅读 `architecture.md` 把握现有依赖方向与既存工具接口签名。
-4. `pyproject.toml` 需追加 `langgraph` 依赖（当前未引入）。
+1. 阅读本文件全部历史决策（特别是偏离 1-4）。
+2. 阅读 `architecture.md` §2 各文件职责与 §4 依赖图。
+3. 跑 implement_plan 附录 A 的 6 项手动验证清单。

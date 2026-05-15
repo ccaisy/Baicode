@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import time
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -12,14 +13,52 @@ from rich.live import Live
 from rich.text import Text
 
 from .config import MissingAPIKeyError, load_config
-from .llm import ChatError, FatalAuthError, chat
+from .graph.builder import (
+    ReflectionRetriesExceeded,
+    ToolCallBudgetExceeded,
+    run as graph_run,
+)
+from .llm import ChatError, FatalAuthError
 
 HISTORY_PATH = str(Path.home() / ".cagent_history")
 
-SYSTEM_PROMPT = (
-    "You are cagent, a terminal-native coding assistant. "
-    "Reply concisely and clearly. Use Markdown only when it helps readability."
+_SYSTEM_PROMPT_TEMPLATE = (
+    "You are cagent, a terminal-native coding assistant.\n"
+    "Today is {today}. Your training data is older than this — for ANY question "
+    "involving recent events, model releases, version numbers, prices, or dates, "
+    "you MUST call web_search first and base your answer ONLY on the tool "
+    "results. Do not rely on specific dates, numbers, or product names from "
+    "training memory; if the tool result doesn't contain a fact, say so rather "
+    "than guessing.\n"
+    "\n"
+    "Tools available:\n"
+    "  - python_exec(code): execute Python in a local subprocess (10s timeout); "
+    "use for calculation, file inspection, or any deterministic computation. "
+    "Always print() the result you want to observe.\n"
+    "  - web_search(query, topic='general'|'news', days=30): fetch top-5 Tavily "
+    "results. Set topic='news' for time-sensitive queries (latest releases, "
+    "current events) so results are filtered by recency; keep topic='general' "
+    "for docs lookup, technical references, error messages.\n"
+    "\n"
+    "IMPORTANT — web_search limits: it returns news / web-page snippets, NOT a "
+    "structured-data API. It CANNOT give you reliable weather forecasts, "
+    "real-time stock prices, flight statuses, exchange rates, live sports "
+    "scores, or any other realtime structured data. If the user asks for such "
+    "information, tell them this is beyond your capability — do NOT loop on "
+    "web_search trying different queries; that will just waste their time.\n"
+    "\n"
+    "Tool-call budget: you may call tools at most 5 times in total per user "
+    "message. If you can't answer within that budget, stop and tell the user "
+    "what you found and what is still unknown.\n"
+    "\n"
+    "When a tool call fails, read its stderr carefully, fix the root cause, "
+    "and retry — do not loop on the same broken code.\n"
+    "Reply concisely. Use Markdown only when it helps readability."
 )
+
+
+def _build_system_prompt() -> str:
+    return _SYSTEM_PROMPT_TEMPLATE.format(today=date.today().isoformat())
 
 
 def render_typewriter(
@@ -64,7 +103,7 @@ def main() -> None:
     )
 
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": SYSTEM_PROMPT}
+        {"role": "system", "content": _build_system_prompt()}
     ]
 
     while True:
@@ -81,16 +120,19 @@ def main() -> None:
         messages.append({"role": "user", "content": text})
 
         try:
-            with console.status(
-                "[dim cyan]thinking...[/dim cyan]",
-                spinner="dots",
-                spinner_style="cyan",
-            ):
-                assistant = chat(messages, config=config)
+            updated_messages = graph_run(messages)
         except FatalAuthError as e:
             console.print(f"[red]{e}[/red]")
             sys.exit(1)
         except ChatError as e:
+            console.print(f"[red]{e}[/red]")
+            messages.pop()
+            continue
+        except ReflectionRetriesExceeded as e:
+            console.print(f"[red]{e}[/red]")
+            messages.pop()
+            continue
+        except ToolCallBudgetExceeded as e:
             console.print(f"[red]{e}[/red]")
             messages.pop()
             continue
@@ -99,7 +141,10 @@ def main() -> None:
             messages.pop()
             continue
 
-        content = assistant.get("content") or ""
+        messages = updated_messages
+
+        last = messages[-1]
+        content = last.get("content") or ""
         if not content:
             console.print("[dim](empty response)[/dim]")
             continue
@@ -108,7 +153,6 @@ def main() -> None:
             render_typewriter(content, console, style="green")
         except KeyboardInterrupt:
             console.print()
-        messages.append({"role": "assistant", "content": content})
 
 
 if __name__ == "__main__":

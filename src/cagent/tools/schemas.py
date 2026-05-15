@@ -29,9 +29,11 @@ WEB_SEARCH_SCHEMA: dict = {
     "function": {
         "name": "web_search",
         "description": (
-            "Search the web via Tavily and return the top-3 results' URL + cleaned content "
-            "(hard-capped at 4000 chars). Use for current events, docs lookup, or error "
-            "messages that may have known fixes online."
+            "Search the web via Tavily and return the top-5 results' URL + cleaned content "
+            "(hard-capped at 4000 chars). Use for docs lookup, unfamiliar error messages, "
+            "or current events. **For time-sensitive queries (latest news, recent releases, "
+            "what happened this week/month) you MUST set topic='news' so results are "
+            "filtered by recency.**"
         ),
         "parameters": {
             "type": "object",
@@ -39,7 +41,22 @@ WEB_SEARCH_SCHEMA: dict = {
                 "query": {
                     "type": "string",
                     "description": "Search query keywords.",
-                }
+                },
+                "topic": {
+                    "type": "string",
+                    "enum": ["general", "news"],
+                    "description": (
+                        "'general' (default) for docs/wiki/technical content; "
+                        "'news' for time-sensitive queries — filters to recent news outlets."
+                    ),
+                },
+                "days": {
+                    "type": "integer",
+                    "description": (
+                        "Only used when topic='news'. Restrict results to the last N days. "
+                        "Default 30. Smaller N = stricter recency."
+                    ),
+                },
             },
             "required": ["query"],
         },

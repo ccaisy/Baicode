@@ -58,6 +58,7 @@ def chat(
                 "role": "assistant",
                 "content": msg.content or "",
                 "tool_calls": getattr(msg, "tool_calls", None),
+                "reasoning_content": getattr(msg, "reasoning_content", None),
             }
         except litellm.AuthenticationError as e:
             raise FatalAuthError(f"鉴权失败：{e}") from e
