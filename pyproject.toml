@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cagent"
+version = "0.1.0"
+description = "Terminal-native AI coding agent (CLI)."
+requires-python = ">=3.10"
+authors = [{ name = "cagent" }]
+dependencies = [
+    "python-dotenv>=1.0.0",
+    "prompt_toolkit>=3.0.43",
+    "rich>=13.7.0",
+    "litellm>=1.40.0",
+]
+
+[project.scripts]
+cagent = "cagent.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-dir]
+"" = "src"
