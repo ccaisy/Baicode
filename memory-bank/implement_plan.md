@@ -85,7 +85,7 @@ class AgentState(TypedDict):
   - 创建 Python 3.10+ 虚拟环境，初始化 `pyproject.toml`（包名 `cagent`，采用 §0.1 的 src 布局）。
   - 引入 `python-dotenv`，在 `src/cagent/config.py` 实现 `load_config()`：读取 `.env` 中的 `DEEPSEEK_API_KEY`、`TAVILY_API_KEY`（必需），`OPENAI_API_KEY`（可选）。
   - 任一必需 Key 缺失时抛出自定义异常 `MissingAPIKeyError`，错误信息明确指出缺哪个 Key。
-- **测试（手动）**：
+- **测试**：
   - 构造完整 `.env`，断言 `load_config()` 正常返回。
   - 删除某个必需 Key，断言抛出 `MissingAPIKeyError` 且信息可读。
 
@@ -96,7 +96,7 @@ class AgentState(TypedDict):
   - **多行输入**：`multiline=True`，提交快捷键绑定 **`Alt+Enter` (Meta+Enter)**。
   - **历史持久化**：`FileHistory("~/.cagent_history")`，支持方向键上下翻历史。
   - 顶层捕获 `KeyboardInterrupt`，打印优雅退出提示后结束进程，**不允许堆栈外泄**。
-- **测试（手动）**：
+- **测试**：
   - 单行输入回显正常。
   - 粘贴多行文本块，按 Alt+Enter 一次性提交。
   - 按 Ctrl+C，验证仅看到退出提示，无 traceback。
@@ -114,7 +114,7 @@ class AgentState(TypedDict):
     - 限流（`RateLimitError`）：退避后允许重试 1 次，仍失败则向 REPL 报错。
     - 网络瞬时错误：提示用户重试。
     - 鉴权失败：致命错误，安全退出整个进程。
-- **测试（手动）**：
+- **测试**：
   - 输入简单问候语，验证 `green` 文本逐字渲染。
   - 把 `DEEPSEEK_API_KEY` 改成错值，验证触发鉴权致命错误并退出。
 
@@ -132,7 +132,7 @@ class AgentState(TypedDict):
   - 用 `subprocess.run([sys.executable, ".workspace/temp_exec.py"], capture_output=True, text=True, timeout=10)` 在**当前激活 venv** 中执行。
   - 返回 `{"stdout": str, "stderr": str, "returncode": int}`；超时时 `stderr` 显式标注 `"TIMEOUT after 10s"`。
   - 在 `tools/schemas.py` 暴露对应的 OpenAI tools schema（参数 `code: string`）。
-- **测试（手动）**：
+- **测试**：
   - 传入 `print("hi")`，断言 `stdout == "hi\n"`、`returncode == 0`。
   - 传入带 `NameError` 的代码，断言函数不崩溃且 `stderr` 含 traceback。
   - 传入 `while True: pass`，断言 10 秒后返回 `TIMEOUT` 标记。
@@ -143,7 +143,7 @@ class AgentState(TypedDict):
   - `src/cagent/tools/web_search.py` 暴露 `web_search(query: str) -> str`。
   - 调用 `tavily-python`，提取 **Top-3** 结果，每条按 `"[url]\ncontent\n"` 拼接，**整体施加 4000 字符硬截断**保护上下文。
   - 在 `tools/schemas.py` 暴露 OpenAI tools schema（参数 `query: string`）。
-- **测试（手动）**：
+- **测试**：
   - 查询当日时效新闻，断言返回字符串含预期关键词、不超过 4000 字符。
 
 ---
@@ -158,7 +158,7 @@ class AgentState(TypedDict):
   - `src/cagent/graph/state.py` 落地 §0.3 的 `AgentState`。
   - `src/cagent/graph/nodes.py` 实现 `agent_node`：调用 `llm.chat(messages, tools=[python_exec_schema, web_search_schema])`，将返回 assistant message 追加到 `messages`，回写新 state。
   - `src/cagent/graph/builder.py` 构建最小图：`START → agent_node → END`，预留条件边接口供 Step 7 接入。
-- **测试（手动）**：
+- **测试**：
   - 通过起始点传入一条测试消息，验证图能完整走通并在终端获得最终回复（颜色按 §0.4）。
 
 ### Step 7: 闭环 ReAct 逻辑与 Tool 节点集成
@@ -170,7 +170,7 @@ class AgentState(TypedDict):
   - 条件边：
     - `messages[-1].tool_calls` 非空 → 路由到 `tool_node`，执行完转回 `agent_node`。
     - 否则 → `END`。
-- **测试（手动）**：
+- **测试**：
   - 输入"计算 1234567 × 7654321"。预期看到 yellow Spinner → 工具节点执行 → 回到 agent_node → 终端 green 输出最终结果。
 
 ### Step 8: 实现错误反思与自愈循环 (Reflection)
@@ -179,7 +179,7 @@ class AgentState(TypedDict):
   - 修改 `tool_node`：检测到 `python_exec` 返回的 `stderr` 非空时，把 `stderr` + 原代码包装为特定格式的 `role="tool"` 消息，**并将 `state["error_count"] += 1`**。
   - 条件边追加判断：若 `error_count >= retry_limit (=3)`，直接路由到 `END` 并抛出 `RuntimeError("Reflection retries exceeded")`，REPL 捕获后提示用户、回到输入提示符。
   - **Ctrl+C 工具内层中断**（落实 §0.5）：`tool_node` 包一层 `try/except KeyboardInterrupt`，先 `subprocess.kill()`，再构造一条 `"Tool execution interrupted by user"` 的 Observation 喂回 agent_node，**REPL 不退出**。
-- **测试（手动）**：
+- **测试**：
   - 输入"写一段含除零错误的 Python 代码并运行"。验证：第一次失败 → agent 重写 → 第二次（或第三次）内成功并输出。
   - 强制让代码连续失败 3 次，验证第 4 次循环被中断，REPL 提示 "Reflection retries exceeded"。
   - Spinner 显示时按 Ctrl+C：验证子进程被杀、REPL 仍存活、模型收到中断 Observation 后给出回应。
@@ -200,7 +200,7 @@ class AgentState(TypedDict):
     ```
   - `cli.py` 的 `main()` 使用 `Typer` 注册为默认命令（无子命令时直接进入 REPL）。
   - 在开发环境执行 `pip install -e .` 完成可编辑安装。
-- **测试（手动）**：
+- **测试**：
   - 开启新独立终端，键入 `cagent`，断言瞬间进入 REPL。
   - 在新终端中完整跑一遍 ReAct 流程（含工具调用 + 反思）。
 
