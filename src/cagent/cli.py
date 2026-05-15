@@ -10,7 +10,7 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
 from rich.console import Console
 from rich.live import Live
-from rich.text import Text
+from rich.markdown import Markdown
 
 from .config import MissingAPIKeyError, load_config
 from .graph.builder import (
@@ -53,7 +53,10 @@ _SYSTEM_PROMPT_TEMPLATE = (
     "\n"
     "When a tool call fails, read its stderr carefully, fix the root cause, "
     "and retry — do not loop on the same broken code.\n"
-    "Reply concisely. Use Markdown only when it helps readability."
+    "Reply concisely. Use Markdown only when it helps readability.\n"
+    "When you output code, always wrap it in fenced code blocks with an "
+    "explicit language tag (e.g. ```python …``` or ```bash …```), so the CLI "
+    "can syntax-highlight it."
 )
 
 
@@ -64,13 +67,24 @@ def _build_system_prompt() -> str:
 def render_typewriter(
     text: str,
     console: Console,
-    style: str = "green",
+    style: str | None = None,
     delay: float = 0.005,
 ) -> None:
-    rendered = Text("", style=style)
-    with Live(rendered, console=console, refresh_per_second=24):
-        for ch in text:
-            rendered.append(ch)
+    # Since Phase 5 `style` is only a fallback hook; Markdown's own styling
+    # (bold, italic, code-block background, link underline) takes precedence.
+    # Throttle: per-char sleep keeps the typewriter rhythm, but Markdown
+    # re-parse + update only fires on newline / end-of-text so a 4000-char
+    # reply doesn't pay 4000× parse cost (Phase 5 Step 12, scheme B).
+    buf = ""
+    with Live(
+        Markdown(buf, code_theme="monokai"),
+        console=console,
+        refresh_per_second=24,
+    ) as live:
+        for i, ch in enumerate(text):
+            buf += ch
+            if ch == "\n" or i == len(text) - 1:
+                live.update(Markdown(buf, code_theme="monokai"))
             time.sleep(delay)
 
 
@@ -150,7 +164,7 @@ def main() -> None:
             continue
 
         try:
-            render_typewriter(content, console, style="green")
+            render_typewriter(content, console)
         except KeyboardInterrupt:
             console.print()
 

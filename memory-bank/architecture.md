@@ -90,8 +90,8 @@
 | 名字 | 签名 | 作用 |
 | --- | --- | --- |
 | `main()` | `() -> None` | `pyproject.toml [project.scripts] cagent` 注册的入口函数 |
-| `render_typewriter(text, console, style, delay)` | 渲染器 | 用 Rich `Live + Text` 模拟逐字打字机。`Text.append(ch)` 而不是 markup，**避免被用户/模型字串里的方括号注入** |
-| `_SYSTEM_PROMPT_TEMPLATE` / `_build_system_prompt()` | `str` / `() -> str` | 模板含 `{today}` 占位符；启动时 `date.today().isoformat()` 注入（每次 `cagent` 启动重算，**明年用是明年的日期**）。模板内嵌：禁止使用训练记忆中具体日期/数字；`web_search` 不是结构化数据 API（天气/股价/航班/汇率遇到直接告知能力受限）；工具调用预算 5 次用完就停 |
+| `render_typewriter(text, console, style=None, delay=0.005)` | 渲染器 | 流式 Markdown 渲染器：`rich.markdown.Markdown(buf, code_theme="monokai")` + `Live.update`。字符级 `time.sleep(delay)` 维持打字机节奏，但 `live.update` **只在换行符或末尾字符触发**（Phase 5 Step 12 方案 B 节流）。`style` 形参降级为 fallback hook（Phase 5 起不再强制染色，Markdown 自身样式优先） |
+| `_SYSTEM_PROMPT_TEMPLATE` / `_build_system_prompt()` | `str` / `() -> str` | 模板含 `{today}` 占位符；启动时 `date.today().isoformat()` 注入（每次 `cagent` 启动重算，**明年用是明年的日期**）。模板内嵌：禁止使用训练记忆中具体日期/数字；`web_search` 不是结构化数据 API（天气/股价/航班/汇率遇到直接告知能力受限）；工具调用预算 5 次用完就停；**Phase 5 起追加**：模型输出代码必须使用带语言标注的围栏代码块以便 CLI 语法高亮 |
 | `HISTORY_PATH` | `str` 常量 | `~/.cagent_history` |
 
 #### cli.py 启动流程
@@ -128,19 +128,19 @@ user_input  ──► strip / 空串跳过
 | 图执行期间 `KeyboardInterrupt` | 红字 + `messages.pop()` + `continue` |
 | 渲染期间 `KeyboardInterrupt` | 仅打一个换行收尾 |
 
-#### cli.py 颜色规范（落实 implement_plan §0.4）
+#### cli.py 颜色规范（Phase 5 起覆盖 implement_plan §0.4）
 
 | 角色 | 颜色 |
 | --- | --- |
 | Banner / 用户输入 | 默认白 |
 | Thought Spinner | `dim cyan` |
 | Action Spinner（Phase 2 接入工具时） | `yellow` |
-| 最终回复 | `green` 打字机 |
+| 最终回复 | **Markdown 流式渲染（终端默认色 + 代码块 `monokai` 高亮 + 粗斜体/链接下划线由 Rich 决定）**。原 plan 的"`green` 打字机"已于 Phase 5 废止（progress 偏离 6） |
 | 异常提示 | `red` |
 
 #### cli.py 依赖关系
 
-- 上游依赖：`prompt_toolkit` + `rich` + `datetime` + `config` + `llm` + `graph.builder`。
+- 上游依赖：`prompt_toolkit` + `rich`（`Console` / `Live` / `Markdown`）+ `datetime` + `config` + `llm` + `graph.builder`。`pygments` 通过 Rich 传递引入，不在 `pyproject.toml` 显式声明。
 - 被谁调：`pyproject.toml` 的 `cagent` 入口、`python -m cagent.cli`。
 
 ---
@@ -350,4 +350,4 @@ START ──► agent ──┬──► tool ──┬──► agent      (常
 
 ## 5. 待添加文件
 
-Phase 1-3 落地后，**implement_plan §0.1 列出的所有源码文件均已就位**。Phase 4 仅做产品化封装（`pip install -e .` 已可用、`pyproject.toml [project.scripts]` 已注册），不引入新代码文件。
+Phase 1-5 落地后，**implement_plan §0.1 列出的所有源码文件均已就位**。Phase 4 仅做产品化封装（`pip install -e .` 已可用、`pyproject.toml [project.scripts]` 已注册）、Phase 5 仅改动 `cli.py` 内部实现，均不引入新代码文件。

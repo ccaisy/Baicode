@@ -206,6 +206,119 @@ class AgentState(TypedDict):
 
 ---
 
+## 阶段五：Markdown 渲染与代码块语法高亮
+
+> **目标**：把当前 `cli.py::render_typewriter` 的纯字符流打字机升级为**流式 Markdown 渲染器**：模型回复中的标题、粗体、斜体、列表、链接、行内代码以富文本呈现；围栏代码块走 pygments 语法高亮（主题 `monokai`）。
+>
+> **范围内**：仅改动 `src/cagent/cli.py`（`render_typewriter` 内部逻辑 + `_SYSTEM_PROMPT_TEMPLATE` 末尾追加一句）。**不新增源码文件**、**不新增第三方依赖**（pygments 是 Rich 的传递依赖，安装 Rich 时已带入）。
+>
+> **设计取舍**（覆盖 §0.4 表格中 Response 行的 "green 打字机" 决策）：
+>
+> - 取消对最终回复整体染 `green`；普通段落使用 Rich 默认前景色，富文本样式（粗体、斜体、代码块背景、链接下划线）由 Markdown 自身生效。
+> - 打字机机制保留：每追加 1 个字符后调用 `Live.update(...)`，把已累积的完整 buffer 重新交给 `rich.markdown.Markdown` 重渲染一次。
+> - Ctrl+C 渲染期不退出 REPL 的契约保持不变。
+
+### Step 10：依赖核对与 Markdown 渲染探针
+
+- **指令**：
+  - 在已激活 venv 内用 `pip show pygments` 确认 pygments 已被 Rich 传递安装；用 `pip show rich` 确认 Rich 版本满足 `pyproject.toml` 中的 `>=13.7.0`。**不要**把 pygments 显式加进 `pyproject.toml`。
+  - 准备一段一次性 Markdown 探针字符串，至少包含以下元素：1 个 `##` 标题、1 段含粗体与斜体的句子、1 段含行内代码的句子、1 个无序列表（≥3 项）、1 个标注 `python` 的围栏代码块、1 行含 `<` `>` `&` 特殊字符的纯文本。
+  - 在 venv 内用一次性 `python -c` 把探针字符串交给 `rich.markdown.Markdown` 并通过 `rich.console.Console().print(...)` 输出。**只验证 Rich 本身的渲染行为，不接入 cagent 任何模块**。
+- **测试**：
+  - 肉眼检查终端输出：标题字号或粗细可见、粗体加粗、斜体倾斜、行内代码有底色框、列表带圆点、围栏代码块出现 monokai 配色的关键字与字符串高亮、`<` `>` `&` 三字符正常显示且未引发 traceback。
+  - 任意一项不通过：检查 Rich/pygments 是否真的装到当前 venv（不是系统 Python）；版本不达标则在本 Step 内升级，**不进入 Step 11**。
+
+### Step 11：把 `render_typewriter` 改造为流式 Markdown 渲染器
+
+- **指令**：
+  - 在 `src/cagent/cli.py` 修改既有的 `render_typewriter(text, console, style=..., delay=...)`：
+    - 保持函数名、形参顺序、调用方位置完全不变（`cli.py::main()` 唯一调用点不动）。
+    - 把 `style` 形参的默认值由 `"green"` 改为 `None`，并在文档/注释里说明：自 Phase 5 起 `style` 仅作 fallback，整体不再强制染色，Markdown 内部样式优先。
+  - 函数内部实现要点（**自然语言描述，禁止本文档出现真实 Python 代码**）：
+    1. 维护一个累积字符串变量，初始为空。
+    2. 进入一次 `rich.live.Live` 上下文，沿用现有的 `refresh_per_second=24`。
+    3. 按字符遍历入参 `text`：每追加 1 个字符到累积字符串后，构造一个 `rich.markdown.Markdown` 实例（指定 `code_theme="monokai"`），用 `Live.update(...)` 把该实例作为新的可渲染对象交给 Live。
+    4. 每个字符之间 `time.sleep(delay)`，`delay` 默认值沿用 0.005。
+    5. 循环结束后 Live 自动退出，让最终态 Markdown 留在 stdout。
+  - 顶层 `try/except KeyboardInterrupt`（在 `cli.py::main()` 包裹 `render_typewriter` 的那段）行为保持不变。
+- **测试**：
+  - 写一个**仅供本 Step 验证的临时手动脚本**（不入库、不写文档）：构造一段 ~400 字符的 Markdown，包含粗体、斜体、行内代码、1 个 ```python 围栏代码块、1 个无序列表，直接调用 `render_typewriter`（不经过 graph、不经过 LLM）。
+  - 验收项（全部满足才通过）：
+    1. 字符自左向右逐个出现，肉眼能感到打字机节奏。
+    2. 围栏闭合（出现配对的尾部 ```）那一刻，代码块整体切换为彩色高亮；高亮前可以是纯文本，**但代码块不能逐字带高亮闪烁**——若闪烁严重则视为 Step 12 性能问题，标记后继续。
+    3. 列表 bullet、粗体、斜体在到达对应 Markdown token 后立即生效。
+    4. 渲染结束无 traceback、终端无残留 ANSI 控制序列。
+
+### Step 12：长文渲染的性能与节流验证
+
+- **指令**：
+  - 由于"每字符触发 1 次完整 Markdown 重解析"是该方案的天然代价，必须核实长回复不卡。
+  - 写一个一次性手动脚本：构造一段长度约 4000 字符的 Markdown，至少含 3 个独立的 ```python 围栏代码块、≥20 行无序列表、若干粗体与行内代码。
+  - 调用 `render_typewriter` 渲染该字符串，用 `time.monotonic()` 同时记录：
+    - **总耗时** `wall_time`。
+    - **单帧最大停顿** `max_gap`：在每次 `Live.update(...)` 调用前后采样时间戳，所有相邻两次 update 的时差中取最大值。
+  - 期望基线：
+    - `wall_time ≈ len(text) * delay`（4000 × 0.005 = 20s，主要由 `time.sleep` 贡献）；总偏差控制在 ±20% 之内。
+    - `max_gap < 100ms`（除去 sleep 占用之后的 Markdown 解析 + 输出本身不超过 100ms）。
+  - 不达标处理（任选其一，**不允许同时启用两项**）：
+    - 方案 A：把 `delay` 默认值从 0.005 调到 0.002，整体压缩至 ~8s。
+    - 方案 B：把 update 粒度从「每字符一次」改为「累计到换行符或 Markdown 块边界（例如 ```、`\n\n`）时才 update 一次」；字符级 `sleep` 保留以保持视觉节奏，但 Markdown 解析次数显著减少。
+  - 实施完缓解方案后，**在本 Step 内用同一段 4000 字字符串重跑一次**，确认达标。
+- **测试**：
+  - 打印 `wall_time` 与 `max_gap` 两个数。
+  - 通过判据：`wall_time` 偏差 ±20% 之内；`max_gap < 100ms`。
+  - 不通过：回到本 Step 切换或调整缓解方案后重测。
+
+### Step 13：联通主循环，真实 LLM 端到端验证
+
+- **指令**：
+  - `cli.py::main()` 不做任何代码改动；`render_typewriter` 的对外签名已保持兼容。
+  - 在真实终端启动 `cagent`，依次输入下面两条用户消息，**每条独立观察**：
+    1. "请用 Markdown 列出 Python 中常见的循环结构（for 和 while），并为每种结构给一个简短的 Python 代码示例。"
+    2. "用三句话解释什么是大整数运算，请把其中两个关键术语用粗体标出。"
+- **测试**：
+  - 第 1 条期望：终端看到带圆点的列表、两个独立的 ```python 代码块且关键字着色、无任何裸 ```、`**`、`_`、`#` Markdown 标记残留。
+  - 第 2 条期望：粗体在两个关键词上加粗生效；其余文本为终端默认色（不是 green）。
+  - 任一条仍出现裸 Markdown 标记 → 渲染未真正生效，回到 Step 11 检查 `Live.update(...)` 的入参是否真的是 `Markdown` 实例而非 `Text` 实例。
+
+### Step 14：边角 case 与异常路径
+
+- **指令**：
+  - 写一个一次性手动脚本，**依次**用 4 段 mocked content 调用 `render_typewriter`：
+    1. 一段含 `if a < b and c > d & e:` 的行内代码段落（验证 HTML 特殊字符不被 Rich 当作 markup 解析也不被吞掉）。
+    2. 一段未闭合的围栏代码块（以三反引号 + `python` 开头、内含 `print("hi")`、**不带**收尾的三反引号）。
+    3. 空字符串 `""`。
+    4. 一段不含任何 Markdown 标记的纯文本（约 80 字符）。
+  - 接着在真实 REPL 触发一次长回复（如让模型写一段较长的解释），在打字机渲染过程中按 Ctrl+C。
+- **测试**：
+  - 子测试 1：`<` `>` `&` 三字符在最终输出中肉眼可见，且未引发 traceback。
+  - 子测试 2：函数返回时**不抛异常**；剩余文本可被当成代码或当成普通段落，两种行为均可接受，**唯一硬要求是不崩溃**。
+  - 子测试 3：函数立即返回；Live 上下文正常进入又退出；终端无残留光标、无空白行堆积。
+  - 子测试 4：作为对照基准，逐字推进、无任何 Markdown 样式生效，视觉与 Phase 4 之前的字符流打字机一致。
+  - REPL 渲染期 Ctrl+C：终端仅打印一个换行收尾，下一行立即看到 `You ▷` 提示符，REPL 不退出、不打印 traceback。
+
+### Step 15：SYSTEM_PROMPT 微调，引导模型产出带语言标注的围栏代码块
+
+- **指令**：
+  - 在 `cli.py::_SYSTEM_PROMPT_TEMPLATE` 字符串末尾追加 1 句指引（与现有英文行风格一致即可，例如："When you output code, always wrap it in fenced code blocks with an explicit language tag (e.g. ```python …``` or ```bash …```), so the CLI can syntax-highlight it."）。
+  - 不调整 prompt 的其他约束条款。
+- **测试**：
+  - 在真实 REPL 输入"写一段 Python 代码计算前 10 个斐波那契数，并解释关键步骤"。
+  - 验收项：
+    1. 模型回复中的 Python 代码块带 `python` 语言标注，肉眼能看到关键字 `def` / `for` / `print` 以及字符串字面量分别着色。
+    2. 如回复中出现 shell 命令示范（例如 `pip install ...`），该代码块带 `bash` 标注。
+  - 若模型在该 prompt 下仍输出无语言标记的围栏代码块：在本 Step 内向 system prompt 同一行追加一句"This is mandatory, not optional."并重测 1 次；若仍未达标，视为模型策略局限、**Phase 5 范围内不再扩展**，将其记为已知限制写入 progress。
+
+### 阶段五完成判据
+
+- `cli.py::render_typewriter` 已替换为流式 Markdown 渲染器，签名兼容、调用点不变。
+- 附录 A 的 6 项手动验证清单在 Phase 5 完成后**全部重跑 1 次**仍通过。
+- 仅 1 个源码文件被改动：`src/cagent/cli.py`（render_typewriter 内部逻辑 + system prompt 末尾追加 1 句）。
+- 无新增源码文件、无新增第三方依赖。
+- `memory-bank/progress.md` 与 `memory-bank/architecture.md` 已同步更新：标注 §0.4 表格中 "Response → green 打字机" 已被覆盖为 "Response → Markdown 流式渲染 + monokai 代码高亮"；记录 Step 12 最终选用的节流方案（A 或 B）以及 Step 15 是否触发"已知限制"分支。
+
+---
+
 ## 附录 A：贯穿所有 Step 的手动验证清单
 
 | # | 场景 | 期望结果 |
