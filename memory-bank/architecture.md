@@ -91,7 +91,7 @@
 | --- | --- | --- |
 | `main()` | `() -> None` | `pyproject.toml [project.scripts] baicode` 注册的入口函数 |
 | `render_typewriter(text, console, style=None, delay=0.005)` | 渲染器 | 流式 Markdown 渲染器：`rich.markdown.Markdown(buf, code_theme="monokai")` + `Live.update`。字符级 `time.sleep(delay)` 维持打字机节奏，但 `live.update` **只在换行符或末尾字符触发**（Phase 5 Step 12 方案 B 节流）。`style` 形参降级为 fallback hook（Phase 5 起不再强制染色，Markdown 自身样式优先） |
-| `_SYSTEM_PROMPT_TEMPLATE` / `_build_system_prompt()` | `str` / `() -> str` | 模板含 `{today}` 占位符；启动时 `date.today().isoformat()` 注入（每次 `baicode` 启动重算，**明年用是明年的日期**）。模板内嵌：禁止使用训练记忆中具体日期/数字；`web_search` 不是结构化数据 API（天气/股价/航班/汇率遇到直接告知能力受限）；工具调用预算 5 次用完就停；**Phase 5 起追加**：模型输出代码必须使用带语言标注的围栏代码块以便 CLI 语法高亮 |
+| `_SYSTEM_PROMPT_TEMPLATE` / `_build_system_prompt()` | `str` / `() -> str` | 模板含 `{today}` 占位符；启动时 `date.today().isoformat()` 注入（每次 `baicode` 启动重算，**明年用是明年的日期**）。模板内嵌：禁止使用训练记忆中具体日期/数字；`web_search` 不是结构化数据 API（天气/股价/航班/汇率遇到直接告知能力受限）；工具调用预算 5 次用完就停；**Phase 5 起**：模型输出代码必须使用带语言标注的围栏代码块以便 CLI 语法高亮；**Phase 6 起**：在工具清单中新增 `shell_exec` 段落，硬约束 cd 必须用 `&&` 串联（每次 shell 调用是独立子进程、无持久 CWD） + 禁交互式命令（vim/nano/less/more/top/htop/ssh-without-BatchMode） + 安装/包管理类命令必须非交互（`-y` / `--yes` / `--quiet` / `DEBIAN_FRONTEND=noninteractive`） |
 | `HISTORY_PATH` | `str` 常量 | `~/.baicode_history` |
 
 #### cli.py 启动流程
@@ -205,7 +205,37 @@ user_input  ──► strip / 空串跳过
 
 ---
 
-### 2.8 `tools/schemas.py` — OpenAI function schema 集中定义
+### 2.8 `tools/shell_exec.py` — 本地 Shell 子进程执行器
+
+**角色**：把 LLM 生成的 shell 命令字符串交给 `/bin/sh` 子进程执行，回传 stdout/stderr/returncode 三元组。**纯净、无状态、无持久 CWD**。
+
+#### shell_exec.py 关键导出
+
+| 名字 | 类型 | 作用 |
+| --- | --- | --- |
+| `TIMEOUT_SECONDS` | `int = 60` | 单次执行硬上限（详见 progress 偏离 8） |
+| `MAX_CHARS` | `int = 4000` | stdout / stderr 各自独立的截断阈值 |
+| `HEAD_CHARS` / `TAIL_CHARS` | `int = 2000` / `int = 2000` | 超长输出保留的头部与尾部字符数 |
+| `_truncate(text)` | 私有 helper | 超长 → `text[:2000] + "\n...[truncated N chars]...\n" + text[-2000:]` |
+| `run_shell(command) -> dict` | 单次执行入口 | 返回 `{"stdout": str, "stderr": str, "returncode": int}` |
+
+#### shell_exec.py 行为约定
+
+- 执行命令：`subprocess.run(command, shell=True, capture_output=True, text=True, timeout=60)`。**不显式 `executable=` 参数**，沿用系统默认 `/bin/sh`（POSIX shell，`&&` / `|` / `>` 全支持，但 `[[ ]]` / process substitution 等 bash 拓展不支持）。
+- **无持久 CWD**：每次调用都是独立子进程，沿用调用方（`baicode` 启动目录）的 CWD；模型需要在同一条 command 内用 `&&` 串联 `cd`，单条 `cd` 无效（system prompt 已硬约束）。
+- 超时分支：捕获 `subprocess.TimeoutExpired` → `returncode = -1` + `stderr` 末尾追加 `"TIMEOUT after 60s"`；已捕获到的部分 stdout/stderr 保留并照常截断。bytes 类型的部分输出自动 `decode("utf-8", errors="replace")`。
+- 截断策略：stdout 与 stderr **各自独立**应用 `MAX_CHARS = 4000` 上限（详见 progress 偏离 9）。
+- **MVP 不做沙箱、不做命令黑名单**：完全信任模型决策，与 python_exec 的策略一致（implement_plan §0.2 / progress Phase 6 决策点）。
+- Phase 6 的 `tool_node` Ctrl+C 中断策略 100% 复用既有内层 `try/except KeyboardInterrupt`，**本文件不实现**。
+
+#### shell_exec.py 依赖关系
+
+- 上游依赖：仅 Python 标准库 `subprocess`。
+- 被谁调：`graph/nodes.py::tool_node`。
+
+---
+
+### 2.9 `tools/schemas.py` — OpenAI function schema 集中定义
 
 **角色**：给 Phase 3 `agent_node` 一次性传给 `llm.chat(messages, tools=ALL_SCHEMAS)`，避免 schema 散落在各工具实现里。
 
@@ -215,12 +245,13 @@ user_input  ──► strip / 空串跳过
 | --- | --- | --- |
 | `PYTHON_EXEC_SCHEMA` | `dict` | OpenAI function calling schema，`function.name="python_exec"`，参数 `code: string (required)` |
 | `WEB_SEARCH_SCHEMA` | `dict` | `function.name="web_search"`，参数 `query: string (required)` + `topic: enum["general","news"]` + `days: integer`。description 中明令"时效问题 MUST set topic='news'" |
-| `ALL_SCHEMAS` | `list[dict]` | `[PYTHON_EXEC_SCHEMA, WEB_SEARCH_SCHEMA]` |
+| `SHELL_EXEC_SCHEMA` | `dict` | `function.name="shell_exec"`，参数 `command: string (required)`。description 内嵌四条约束：60s 超时 / 输出截断 / cd 隔离（每次调用独立子进程） / 禁交互式命令（vim/less/top/ssh-without-BatchMode） + 安装类命令必须非交互（`-y` / `--yes` / `--quiet` / `DEBIAN_FRONTEND=noninteractive`） |
+| `ALL_SCHEMAS` | `list[dict]` | `[PYTHON_EXEC_SCHEMA, WEB_SEARCH_SCHEMA, SHELL_EXEC_SCHEMA]` |
 
 #### schemas.py 行为约定
 
 - description 字段已写明用途、超时、截断等关键约束，引导模型合理选择工具。
-- 字段名（`python_exec` / `web_search` / `code` / `query`）必须与工具函数签名 1:1 对应；Phase 3 `tool_node` 按这些字符串做分发。
+- 字段名（`python_exec` / `web_search` / `shell_exec` / `code` / `query` / `command`）必须与工具函数签名 1:1 对应；`tool_node` 按这些字符串做分发。
 
 #### schemas.py 依赖关系
 
@@ -229,52 +260,56 @@ user_input  ──► strip / 空串跳过
 
 ---
 
-### 2.9 `graph/__init__.py`
+### 2.10 `graph/__init__.py`
 
 包占位，不导出符号。
 
 ---
 
-### 2.10 `graph/state.py` — AgentState 定义
+### 2.11 `graph/state.py` — AgentState 定义
 
 **角色**：LangGraph 节点间流转的 `TypedDict`。
 
 | 字段 | 类型 | 由谁初始化 | 含义 |
 | --- | --- | --- | --- |
 | `messages` | `list` | `builder.run` | 完整对话序列（含 assistant.tool_calls / role="tool" 结果 / reasoning_content） |
-| `error_count` | `int` | `builder.run`（=0） | 当轮 user 内累计的工具失败次数（仅在 `python_exec.stderr` 非空 / tool 抛异常时 ++） |
+| `error_count` | `int` | `builder.run`（=0） | 当轮 user 内累计的工具失败次数。触发条件：`python_exec.stderr` 非空 / `shell_exec` **超时**（`returncode == -1`）或抛 Python 异常 / 任何 tool 抛通用异常 / JSON 解析失败 / 未知工具名。**`shell_exec` 的非 0 returncode 不计入**（grep 无匹配 / test 失败这类是正常业务输出） |
 | `retry_limit` | `int` | `builder.run`（=3） | `error_count >= retry_limit` → `ReflectionRetriesExceeded` |
 | `tool_calls_count` | `int` | `builder.run`（=0） | 当轮 user 内 `tool_node` 被调用的总次数（按节点 +1，不按子调用） |
 | `max_tool_calls` | `int` | `builder.run`（=5） | `tool_calls_count >= max_tool_calls` 且模型仍想调工具 → `ToolCallBudgetExceeded` |
 
 ---
 
-### 2.11 `graph/nodes.py` — agent_node + tool_node（手写 ReAct + Reflection）
+### 2.12 `graph/nodes.py` — agent_node + tool_node（手写 ReAct + Reflection）
 
 #### nodes.py 关键导出
 
 | 名字 | 签名 | 作用 |
 | --- | --- | --- |
 | `agent_node(state) -> dict` | LangGraph 节点 | `Console.status("thinking...", style=dim cyan)` + `chat(messages, tools=ALL_SCHEMAS)` → assistant message（含 `reasoning_content` / `tool_calls` 时一并写入） |
-| `tool_node(state) -> dict` | LangGraph 节点 | `Console.status("Running tool...", style=yellow)` + 按 `function.name` 分发 `python_exec` / `web_search`；Observation 静默；`tool_calls_count` 末尾 +1 |
+| `tool_node(state) -> dict` | LangGraph 节点 | `Console.status("Running tool...", style=yellow)` + 按 `function.name` 分发 `python_exec` / `web_search` / `shell_exec`；Observation 静默；`tool_calls_count` 末尾 +1 |
 | `_normalize_tool_calls(tool_calls)` | 私有 helper | 把 LiteLLM 的 pydantic `ChatCompletionMessageToolCall` 列表转成 dict 列表，**确保下次调用 LiteLLM 时格式合法** |
+| `_format_python_failure` / `_format_python_success` | 私有 helper | `python_exec` 结果的反思格式 / 成功格式包裹 |
+| `_format_shell_result` / `_format_shell_timeout` | 私有 helper | `shell_exec` 结果的统一格式（含 returncode + 原 command + stdout + stderr）；`_format_shell_timeout` 附加 60s 预算提示，专用于反思路径 |
 
 #### nodes.py 行为约定
 
 - `python_exec`：`stderr` 非空 → `error_count++` + content 用反思格式（`Execution failed (returncode=...).\nCode:\n\`\`\`python\n{code}\n\`\`\`\nStderr:\n...\nStdout:\n...`）。
 - `web_search`：把 `args.get("topic", "general")` 与 `args.get("days", 30)` 透传给工具函数；异常不走反思（直接 `except Exception` → `error_count++`）。
+- `shell_exec`：把 `args.get("command", "")` 传给 `run_shell`；**只在 `returncode == -1`（超时）时 `error_count++` + 用 `_format_shell_timeout` 反思格式**，其他 returncode（含非 0）一律走 `_format_shell_result` 原样回传，**不计入 error_count**（progress 偏离 7）。
 - JSON 解析失败：`json.JSONDecodeError` → `error_count++` + 回填错误提示，**不中断循环**（多 tool_call 场景仍能处理后续调用）。
-- `KeyboardInterrupt`（implement_plan §0.5 落实点）：当前 tool_call 回填 `"Tool execution interrupted by user."`；后续所有 tool_call 回填 `"Tool execution skipped due to earlier interrupt."`；`break` 跳出循环；**不冒泡，REPL 保持存活**。子进程的 kill 由 `subprocess.run` 自身完成。
+- 任何工具抛 Python 异常（含 `OSError` / Tavily 异常 / subprocess 启动失败等）：`except Exception` → `error_count++` + 回填 `Tool '...' raised XError: ...`。
+- `KeyboardInterrupt`（implement_plan §0.5 落实点）：当前 tool_call 回填 `"Tool execution interrupted by user."`；后续所有 tool_call 回填 `"Tool execution skipped due to earlier interrupt."`；`break` 跳出循环；**不冒泡，REPL 保持存活**。子进程的 kill 由 `subprocess.run` 自身完成。**shell_exec 100% 复用此中断逻辑**，未单独实现。
 - 模块顶部 `_console = Console()` 单例；与 `cli.py` 的 Console 不同实例但同写 stdout，Rich 内部安全。
 
 #### nodes.py 依赖关系
 
-- 上游依赖：`rich.console.Console` + `baicode.llm.chat` + `baicode.tools.{python_exec, web_search, schemas}`。
+- 上游依赖：`rich.console.Console` + `baicode.llm.chat` + `baicode.tools.{python_exec, web_search, shell_exec, schemas}`。
 - 被谁调：`graph.builder.build_graph()` 注册为 `"agent"` / `"tool"` 节点。
 
 ---
 
-### 2.12 `graph/builder.py` — 图构建 + 条件边路由 + REPL 入口
+### 2.13 `graph/builder.py` — 图构建 + 条件边路由 + REPL 入口
 
 #### builder.py 关键导出
 
@@ -329,12 +364,13 @@ START ──► agent ──┬──► tool ──┬──► agent      (常
           ┌─────────  StateGraph  ─────────┐
           │                                 │
           ▼                                 ▼
-   agent_node (chat + tools=ALL_SCHEMAS)    tool_node (python_exec | web_search)
+   agent_node (chat + tools=ALL_SCHEMAS)    tool_node (python_exec | web_search | shell_exec)
           │                                 │
           ▼                                 ▼
         llm.chat                       tools.python_exec.run_python
        (litellm)                       tools.web_search.web_search
-                                       (tavily-python + config.load_config)
+                                       tools.shell_exec.run_shell
+                                       (tavily-python + config.load_config + subprocess)
 
                        │ updated_messages
                        ▼
@@ -350,4 +386,4 @@ START ──► agent ──┬──► tool ──┬──► agent      (常
 
 ## 5. 待添加文件
 
-Phase 1-5 落地后，**implement_plan §0.1 列出的所有源码文件均已就位**。Phase 4 仅做产品化封装（`pip install -e .` 已可用、`pyproject.toml [project.scripts]` 已注册）、Phase 5 仅改动 `cli.py` 内部实现，均不引入新代码文件。
+Phase 1-6 落地后，**implement_plan §0.1 列出的所有源码文件均已就位**，Phase 6 额外新增 `tools/shell_exec.py`（plan §0.1 目录树未列但属于 tools/ 自然扩展）。Phase 4 仅做产品化封装（`pip install -e .` 已可用、`pyproject.toml [project.scripts]` 已注册）、Phase 5 仅改动 `cli.py` 内部实现、Phase 6 新增 1 个源码文件 + 修改 3 个既有文件，均未引入新的第三方依赖。

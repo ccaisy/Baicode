@@ -10,6 +10,7 @@ from rich.console import Console
 from baicode.llm import chat
 from baicode.tools.python_exec import run_python
 from baicode.tools.schemas import ALL_SCHEMAS
+from baicode.tools.shell_exec import run_shell
 from baicode.tools.web_search import web_search
 
 _console = Console()
@@ -83,6 +84,26 @@ def _format_python_success(result: dict) -> str:
     )
 
 
+def _format_shell_result(command: str, result: dict) -> str:
+    return (
+        f"Shell command (returncode={result['returncode']}).\n"
+        f"Command:\n```bash\n{command}\n```\n"
+        f"Stdout:\n{result['stdout']}\n"
+        f"Stderr:\n{result['stderr']}\n"
+    )
+
+
+def _format_shell_timeout(command: str, result: dict) -> str:
+    return (
+        f"Shell command timed out (returncode={result['returncode']}).\n"
+        f"Command:\n```bash\n{command}\n```\n"
+        f"Stderr:\n{result['stderr']}\n"
+        f"Stdout:\n{result['stdout']}\n"
+        f"Hint: this command exceeded the 60s budget. Make sure it is "
+        f"non-interactive and not running a foreground long-lived process."
+    )
+
+
 def tool_node(state: dict) -> dict:
     last = state["messages"][-1]
     tool_calls = last.get("tool_calls") or []
@@ -131,6 +152,14 @@ def tool_node(state: dict) -> dict:
                         topic=args.get("topic", "general"),
                         days=args.get("days", 30),
                     )
+                elif name == "shell_exec":
+                    command = args.get("command", "")
+                    result = run_shell(command)
+                    if result["returncode"] == -1:
+                        new_error_count += 1
+                        content = _format_shell_timeout(command, result)
+                    else:
+                        content = _format_shell_result(command, result)
                 else:
                     new_error_count += 1
                     content = f"Unknown tool: {name}"

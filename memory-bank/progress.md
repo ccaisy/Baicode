@@ -298,9 +298,79 @@ Step 9 的产品化封装在 Phase 1-3 期间已经反复验证可用（`pip ins
 
 ---
 
-## 下一阶段（Phase 6+）— 未规划
+## Phase 6: 终端交互能力 (Shell Execution) — ✅ 完成于 2026-05-17
 
-implement_plan 至 Phase 5 全部落地。如继续推进，候选方向：
+### Step 1-4 一并落地 — ✅
+
+#### Phase 6 落地文件
+
+- `src/baicode/tools/shell_exec.py`（**新建**）
+- `src/baicode/tools/schemas.py`（追加 `SHELL_EXEC_SCHEMA`，`ALL_SCHEMAS` 扩为 3 项）
+- `src/baicode/graph/nodes.py`（import `run_shell` + 两个 helper `_format_shell_result` / `_format_shell_timeout` + `tool_node` 分发增 `shell_exec` 分支）
+- `src/baicode/cli.py`（`_SYSTEM_PROMPT_TEMPLATE` 工具清单中 web_search 之后追加 shell_exec 段落）
+
+#### Phase 6 关键设计点
+
+- `run_shell(command: str) -> dict`：`subprocess.run(command, shell=True, capture_output=True, text=True, timeout=60)`；**不显式 executable**（沿用系统默认 `/bin/sh`，POSIX 子集，`&&` / `|` / `>` 全支持）。
+- 常量：`TIMEOUT_SECONDS = 60`、`MAX_CHARS = 4000`、`HEAD_CHARS = 2000`、`TAIL_CHARS = 2000`。
+- 超时处理：捕获 `subprocess.TimeoutExpired` → `returncode = -1` + `stderr` 末尾追加 `"TIMEOUT after 60s"`（与 python_exec 风格对齐）；保留部分 stdout/stderr。
+- **截断策略**：stdout 与 stderr **各自独立**应用 `MAX_CHARS = 4000` 上限；超限保留前 2000 + `\n...[truncated N chars]...\n` + 后 2000。
+- **反思触发**：tool_node 中 shell_exec 分支只在 `returncode == -1`（超时）或 Python 异常时 `error_count++` 并使用反思格式；**非 0 returncode 一律原样回传给模型**（grep 无匹配 = rc 1、test 失败 = rc 1、diff 有差异 = rc 1，这些都是 shell 正常业务输出）。这与 python_exec 的"stderr 非空即失败"语义显著不同。
+- `KeyboardInterrupt`：100% 复用 tool_node 现有的内层中断逻辑，shell_exec 自动受益；图层不改。
+- `SHELL_EXEC_SCHEMA`：`function.name="shell_exec"`、参数 `command: string (required)`；description 内嵌四条约束（60s 超时 / 输出截断 / cd 隔离 / 禁交互式命令）。`ALL_SCHEMAS = [PYTHON_EXEC_SCHEMA, WEB_SEARCH_SCHEMA, SHELL_EXEC_SCHEMA]`。
+- system prompt：工具清单的 web_search 之后追加 shell_exec 段落，硬约束 `cd` 必须用 `&&` 串联 + 禁 `vim / nano / less / more / top / htop / ssh without -o BatchMode=yes` + 安装类命令必带 `-y / --yes / --quiet` 或 `DEBIAN_FRONTEND=noninteractive` 前缀。
+
+#### Phase 6 测试证据
+
+实施期 Mock 与单元测试：
+
+- ✅ Step 1 / `run_shell`：A 基础命令（`echo hello && echo world` → `hello\nworld\n`、rc=0）、B 60s 超时（`sleep 75`、`wall=60.00s`、`returncode=-1`、stderr 含 TIMEOUT 标记）、C 巨量输出截断（`yes 'x' \| head -n 100000` → 4032 字符、含 truncated 标记、前后各 2000 字符正确）、D 非 0 rc（`echo abc \| grep xyz` → rc=1 原样返回）、E `&&` 串联、F 管道 `|`。
+- ✅ Step 2 / schemas：`ALL_SCHEMAS` 长度 2→3、name 顺序 `[python_exec, web_search, shell_exec]`、`SHELL_EXEC_SCHEMA.function.parameters.required == ["command"]`。
+- ✅ Step 3 / tool_node 路由：5 个 mock 场景全过 — ①shell_exec 正常路由回填 tool 消息 ②非 0 rc 不 `error_count++` ③未知工具兜底未受影响 ④超时（mock `run_shell` 返回 `returncode=-1`）触发反思 ⑤Python 异常（mock 抛 `OSError`）触发反思。
+- ✅ Mock E2E：mock LLM 两轮（发起 shell_exec → 收工具结果生成最终回复），agent→tool→agent 闭环跑通。
+
+用户真实 TTY 验收（2026-05-17，8 项端到端 + 2 项回归全过）：
+
+| # | 场景 | 结果 |
+| --- | --- | --- |
+| 1 | 基础路由（"当前目录下有哪些文件？"）走 shell_exec 而非 python_exec | ✅ |
+| 2 | 多步 `&&` 串联（mkdir/cd/touch/ls 一条命令完成） | ✅ |
+| 3 | 跨工具协作（shell `head` → python 计数字母） | ✅ |
+| 4 | 非交互式约束生效（pip / install 类命令带 `--quiet` / `-y`） | ✅ |
+| 5 | MVP 不加护栏（危险但合理的命令照执行） | ✅ |
+| 6 | `sleep 90` 触发 60s 超时；REPL 不卡死，模型收到 timeout observation 后正确响应 | ✅ |
+| 7 | Spinner 期间 Ctrl+C：子进程被杀、REPL 存活、回到 `You ▷` | ✅ |
+| 8 | `grep` 无匹配 rc=1 不触发反思死循环 | ✅ |
+| R1 | python_exec 算术回归（1234567×7654321） | ✅ |
+| R2 | web_search news 回归 | ✅ |
+
+### Phase 6 偏离 implement_plan 的决策记录
+
+implement_plan Phase 6 采用"指令 + 验证测试"两栏制，没写死 timeout 值、截断阈值、反思触发条件等细粒度参数。下面三条是实施前 AskUserQuestion 中用户拍板的关键决策，非真正"偏离"，但单独记录便于后人 review。
+
+#### 偏离 7：shell_exec 反思触发条件仅限超时 + Python 异常
+
+- **起因**：plan Step 1 只说"捕获超时异常"，没规定 `returncode != 0` 是否触发反思。如果照搬 python_exec 的"stderr 非空即失败"逻辑会误伤大量正常 shell 业务输出（grep / test / diff / find 等命中"无结果"语义时 rc 非 0 是约定俗成的）。
+- **决策**：tool_node 中 shell_exec 分支只在 `returncode == -1`（来自 TimeoutExpired 标记）或 Python 异常（subprocess 启动失败等）时 `error_count++` + 反思格式；其他 returncode 一律原样回传，由模型自行判断。
+- **影响范围**：tool_node 中 shell_exec 分支与 python_exec 分支语义不同；前者不会触发自愈循环。
+
+#### 偏离 8：超时 60s（plan 示例为"例如 15 秒"）
+
+- **起因**：plan Step 1 写"例如 15 秒"。`pip install`、`apt-get install`、`git clone` 等常见命令在 15s 内大概率超时，会让 Agent 完全无法做常规环境操作。
+- **决策**：固定 `TIMEOUT_SECONDS = 60`，在常规命令容忍度与"挂死防范"窗口间取平衡。
+- **影响范围**：仅 `shell_exec.py` 中的 `TIMEOUT_SECONDS` 常量；其余逻辑不变。
+
+#### 偏离 9：截断策略选 stdout / stderr 各自独立 4000
+
+- **起因**：AskUserQuestion 中用户回答"总长 4000"未明确指 stdout+stderr 合并还是各自独立。
+- **决策**：stdout 与 stderr 各自独立应用 4000 上限。理由：①与 python_exec 的"stdout / stderr 双字段"结构一致；②shell 的 stderr 通常很短，独立截断能保留 stdout 的完整信息密度；③极端情况单次回传 LLM 的 tool content ≤ ~8200 字符（stdout 4000 + stderr 4000 + 包裹文案 ~200），仍在合理预算内。
+- **影响范围**：单次 shell_exec 回传内容长度上界。
+
+---
+
+## 下一阶段（Phase 7+）— 未规划
+
+implement_plan 至 Phase 6 全部落地。如继续推进，候选方向：
 
 - Plan-and-Execute 多步规划（implement_plan 附录 B 中 MVP 明确推迟项）。
 - pytest 自动化测试套件（附录 B 推迟项）。
@@ -309,6 +379,6 @@ implement_plan 至 Phase 5 全部落地。如继续推进，候选方向：
 
 ### 接手者请先做的事
 
-1. 阅读本文件全部历史决策（特别是偏离 1-6）。
+1. 阅读本文件全部历史决策（特别是偏离 1-9）。
 2. 阅读 `architecture.md` §2 各文件职责与 §4 依赖图。
-3. 跑 implement_plan 附录 A 的 6 项手动验证清单 + Phase 5 Step 13/15 的真实 REPL 验证。
+3. 跑 implement_plan 附录 A 的 6 项手动验证清单 + Phase 5 Step 13/15 + Phase 6 的 8 项端到端走查（详见本文件 Phase 6 测试证据）的真实 REPL 验证。
