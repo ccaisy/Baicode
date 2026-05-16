@@ -20,10 +20,10 @@ from .graph.builder import (
 )
 from .llm import ChatError, FatalAuthError
 
-HISTORY_PATH = str(Path.home() / ".cagent_history")
+HISTORY_PATH = str(Path.home() / ".baicode_history")
 
 _SYSTEM_PROMPT_TEMPLATE = (
-    "You are cagent, a terminal-native coding assistant.\n"
+    "You are baicode, a terminal-native coding assistant.\n"
     "Today is {today}. Your training data is older than this — for ANY question "
     "involving recent events, model releases, version numbers, prices, or dates, "
     "you MUST call web_search first and base your answer ONLY on the tool "
@@ -93,7 +93,7 @@ def main() -> None:
 
     if not sys.stdin.isatty():
         console.print(
-            "[red]cagent 必须在交互式终端中运行（当前 stdin 不是 TTY）。[/red]"
+            "[red]baicode 必须在交互式终端中运行（当前 stdin 不是 TTY）。[/red]"
         )
         sys.exit(1)
 
@@ -104,11 +104,11 @@ def main() -> None:
         sys.exit(1)
 
     console.print(
-        f"[bold green]cagent[/bold green] ready · model "
+        f"[bold green]baicode[/bold green] ready · model "
         f"[cyan]{config.default_model}[/cyan]"
     )
     console.print(
-        "[dim]Alt+Enter 提交  ·  Ctrl+C 退出  ·  history: ~/.cagent_history[/dim]"
+        "[dim]Alt+Enter 提交  ·  Ctrl+C 退出  ·  history: ~/.baicode_history[/dim]"
     )
 
     session: PromptSession[str] = PromptSession(

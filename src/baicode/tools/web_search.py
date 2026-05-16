@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from tavily import TavilyClient
 
-from cagent.config import load_config
+from baicode.config import load_config
 
 MAX_CHARS = 4000
 TOP_K = 5

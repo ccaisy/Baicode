@@ -8,21 +8,21 @@
 
 | 路径 | 作用 |
 | --- | --- |
-| `pyproject.toml` | 包元信息（name=`cagent`、`requires-python>=3.10`）、依赖（`python-dotenv` / `prompt_toolkit` / `rich` / `litellm` / `tavily-python` / `langgraph`）、`[project.scripts] cagent = "cagent.cli:main"` 入口、`tool.setuptools.packages.find` 配 src 布局 |
+| `pyproject.toml` | 包元信息（name=`baicode`、`requires-python>=3.10`）、依赖（`python-dotenv` / `prompt_toolkit` / `rich` / `litellm` / `tavily-python` / `langgraph`）、`[project.scripts] baicode = "baicode.cli:main"` 入口、`tool.setuptools.packages.find` 配 src 布局 |
 | `.env` | 本地真实 Key（**已 .gitignore**） |
 | `.env.example` | 配置模板，列出 `DEEPSEEK_API_KEY` / `TAVILY_API_KEY` / `OPENAI_API_KEY` |
 | `.gitignore` | macOS / Python 工件 + `.env` + `.workspace/`（Phase 2 工具执行临时区） |
 | `memory-bank/` | 项目文档：PRD、技术栈、implement_plan、progress（进度日志）、architecture（本文件） |
 | `.venv/` | 开发环境 venv（**已 .gitignore**） |
-| `src/cagent/` | 包代码主体，详见 §2 |
+| `src/baicode/` | 包代码主体，详见 §2 |
 
 ---
 
-## 2. `src/cagent/` 包内文件
+## 2. `src/baicode/` 包内文件
 
 ### 2.1 `__init__.py`
 
-仅暴露 `__version__ = "0.1.0"`。**不引入任何运行时模块**，确保 `import cagent` 零副作用、零开销。
+仅暴露 `__version__ = "0.1.0"`。**不引入任何运行时模块**，确保 `import baicode` 零副作用、零开销。
 
 ---
 
@@ -89,10 +89,10 @@
 
 | 名字 | 签名 | 作用 |
 | --- | --- | --- |
-| `main()` | `() -> None` | `pyproject.toml [project.scripts] cagent` 注册的入口函数 |
+| `main()` | `() -> None` | `pyproject.toml [project.scripts] baicode` 注册的入口函数 |
 | `render_typewriter(text, console, style=None, delay=0.005)` | 渲染器 | 流式 Markdown 渲染器：`rich.markdown.Markdown(buf, code_theme="monokai")` + `Live.update`。字符级 `time.sleep(delay)` 维持打字机节奏，但 `live.update` **只在换行符或末尾字符触发**（Phase 5 Step 12 方案 B 节流）。`style` 形参降级为 fallback hook（Phase 5 起不再强制染色，Markdown 自身样式优先） |
-| `_SYSTEM_PROMPT_TEMPLATE` / `_build_system_prompt()` | `str` / `() -> str` | 模板含 `{today}` 占位符；启动时 `date.today().isoformat()` 注入（每次 `cagent` 启动重算，**明年用是明年的日期**）。模板内嵌：禁止使用训练记忆中具体日期/数字；`web_search` 不是结构化数据 API（天气/股价/航班/汇率遇到直接告知能力受限）；工具调用预算 5 次用完就停；**Phase 5 起追加**：模型输出代码必须使用带语言标注的围栏代码块以便 CLI 语法高亮 |
-| `HISTORY_PATH` | `str` 常量 | `~/.cagent_history` |
+| `_SYSTEM_PROMPT_TEMPLATE` / `_build_system_prompt()` | `str` / `() -> str` | 模板含 `{today}` 占位符；启动时 `date.today().isoformat()` 注入（每次 `baicode` 启动重算，**明年用是明年的日期**）。模板内嵌：禁止使用训练记忆中具体日期/数字；`web_search` 不是结构化数据 API（天气/股价/航班/汇率遇到直接告知能力受限）；工具调用预算 5 次用完就停；**Phase 5 起追加**：模型输出代码必须使用带语言标注的围栏代码块以便 CLI 语法高亮 |
+| `HISTORY_PATH` | `str` 常量 | `~/.baicode_history` |
 
 #### cli.py 启动流程
 
@@ -141,13 +141,13 @@ user_input  ──► strip / 空串跳过
 #### cli.py 依赖关系
 
 - 上游依赖：`prompt_toolkit` + `rich`（`Console` / `Live` / `Markdown`）+ `datetime` + `config` + `llm` + `graph.builder`。`pygments` 通过 Rich 传递引入，不在 `pyproject.toml` 显式声明。
-- 被谁调：`pyproject.toml` 的 `cagent` 入口、`python -m cagent.cli`。
+- 被谁调：`pyproject.toml` 的 `baicode` 入口、`python -m baicode.cli`。
 
 ---
 
 ### 2.5 `tools/__init__.py`
 
-包占位，**不导出任何符号**。Phase 3 的 `graph/nodes.py` 直接 `from cagent.tools.python_exec import run_python` / `from cagent.tools.web_search import web_search` 引用。
+包占位，**不导出任何符号**。Phase 3 的 `graph/nodes.py` 直接 `from baicode.tools.python_exec import run_python` / `from baicode.tools.web_search import web_search` 引用。
 
 ---
 
@@ -167,7 +167,7 @@ user_input  ──► strip / 空串跳过
 #### python_exec.py 行为约定
 
 - 执行命令：`subprocess.run([sys.executable, ".workspace/temp_exec.py"], capture_output=True, text=True, timeout=10)`。
-- 子进程沿用调用方的 CWD（即用户启动 `cagent` 的目录）。
+- 子进程沿用调用方的 CWD（即用户启动 `baicode` 的目录）。
 - 超时分支：捕获 `subprocess.TimeoutExpired`，`stderr` 末尾追加 `"TIMEOUT after 10s"`、`returncode = -1`。已捕获到的部分 stdout/stderr 会保留前缀。
 - **MVP 不做沙箱**：直接复用当前 venv，权限继承调用方。
 - Phase 3 的 `tool_node` Ctrl+C 中断策略（implement_plan §0.5）将在节点层包一层 `try/except KeyboardInterrupt`，**本文件不实现**。
@@ -200,7 +200,7 @@ user_input  ──► strip / 空串跳过
 
 #### web_search.py 依赖关系
 
-- 上游依赖：`tavily` (`tavily-python` 包) + `cagent.config.load_config`。
+- 上游依赖：`tavily` (`tavily-python` 包) + `baicode.config.load_config`。
 - 被谁调：`graph/nodes.py::tool_node`。
 
 ---
@@ -269,7 +269,7 @@ user_input  ──► strip / 空串跳过
 
 #### nodes.py 依赖关系
 
-- 上游依赖：`rich.console.Console` + `cagent.llm.chat` + `cagent.tools.{python_exec, web_search, schemas}`。
+- 上游依赖：`rich.console.Console` + `baicode.llm.chat` + `baicode.tools.{python_exec, web_search, schemas}`。
 - 被谁调：`graph.builder.build_graph()` 注册为 `"agent"` / `"tool"` 节点。
 
 ---
@@ -299,7 +299,7 @@ START ──► agent ──┬──► tool ──┬──► agent      (常
 
 #### builder.py 依赖关系
 
-- 上游依赖：`langgraph.graph.StateGraph` + `cagent.graph.{nodes, state}`。
+- 上游依赖：`langgraph.graph.StateGraph` + `baicode.graph.{nodes, state}`。
 - 被谁调：`cli.py::main()` 主循环。
 
 ---
@@ -308,7 +308,7 @@ START ──► agent ──┬──► tool ──┬──► agent      (常
 
 | 路径 | 何时创建 | 用途 |
 | --- | --- | --- |
-| `~/.cagent_history` | REPL 启动时 prompt_toolkit 自动创建 | 跨会话方向键历史 |
+| `~/.baicode_history` | REPL 启动时 prompt_toolkit 自动创建 | 跨会话方向键历史 |
 | `.workspace/` | `tools.python_exec.run_python` 首次调用时 `mkdir(exist_ok=True)` | 工具执行临时区，相对 CWD |
 | `.workspace/temp_exec.py` | 同上，每次 `run_python` **覆盖写** | Python 执行器临时代码文件，不主动清理（事后查验） |
 | `.venv/` | 开发者 `python -m venv .venv` 后 | 开发环境 |

@@ -1,4 +1,4 @@
-"""OpenAI tools schema definitions for cagent's built-in tools."""
+"""OpenAI tools schema definitions for baicode's built-in tools."""
 
 from __future__ import annotations
 

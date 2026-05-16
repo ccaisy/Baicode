@@ -12,10 +12,10 @@
 myagent/
 ├── .env                          # 各类 API Key（不入库）
 ├── .gitignore
-├── pyproject.toml                # 包元信息 + 入口脚本 cagent
+├── pyproject.toml                # 包元信息 + 入口脚本 baicode
 ├── memory-bank/                  # 文档
 └── src/
-    └── cagent/
+    └── baicode/
         ├── __init__.py
         ├── cli.py                # REPL 入口、prompt_toolkit、顶层 Ctrl+C
         ├── config.py             # .env 配置加载
@@ -44,7 +44,7 @@ myagent/
 | 反思上限 | `max_retries = 3`，超限抛异常并退回 REPL |
 | Plan-and-Execute | **MVP 推迟**，本期只做 ReAct 单步推理闭环 |
 | 流式策略 | LiteLLM 端 `stream=False`；UI 层用 Rich **伪流式打字机**渲染最终回复 |
-| CLI 入口命令名 | `cagent` |
+| CLI 入口命令名 | `baicode` |
 | 测试方式 | **MVP 不写 pytest**，全部通过启动 CLI 手动验证边界 |
 
 ### 0.3 AgentState 数据结构
@@ -82,8 +82,8 @@ class AgentState(TypedDict):
 ### Step 1: 环境初始化与配置加载
 
 - **指令**：
-  - 创建 Python 3.10+ 虚拟环境，初始化 `pyproject.toml`（包名 `cagent`，采用 §0.1 的 src 布局）。
-  - 引入 `python-dotenv`，在 `src/cagent/config.py` 实现 `load_config()`：读取 `.env` 中的 `DEEPSEEK_API_KEY`、`TAVILY_API_KEY`（必需），`OPENAI_API_KEY`（可选）。
+  - 创建 Python 3.10+ 虚拟环境，初始化 `pyproject.toml`（包名 `baicode`，采用 §0.1 的 src 布局）。
+  - 引入 `python-dotenv`，在 `src/baicode/config.py` 实现 `load_config()`：读取 `.env` 中的 `DEEPSEEK_API_KEY`、`TAVILY_API_KEY`（必需），`OPENAI_API_KEY`（可选）。
   - 任一必需 Key 缺失时抛出自定义异常 `MissingAPIKeyError`，错误信息明确指出缺哪个 Key。
 - **测试**：
   - 构造完整 `.env`，断言 `load_config()` 正常返回。
@@ -92,9 +92,9 @@ class AgentState(TypedDict):
 ### Step 2: 构建 REPL 基础交互循环
 
 - **指令**：
-  - 在 `src/cagent/cli.py` 用 `prompt_toolkit` 构建持续监听的无限循环。
+  - 在 `src/baicode/cli.py` 用 `prompt_toolkit` 构建持续监听的无限循环。
   - **多行输入**：`multiline=True`，提交快捷键绑定 **`Alt+Enter` (Meta+Enter)**。
-  - **历史持久化**：`FileHistory("~/.cagent_history")`，支持方向键上下翻历史。
+  - **历史持久化**：`FileHistory("~/.baicode_history")`，支持方向键上下翻历史。
   - 顶层捕获 `KeyboardInterrupt`，打印优雅退出提示后结束进程，**不允许堆栈外泄**。
 - **测试**：
   - 单行输入回显正常。
@@ -105,7 +105,7 @@ class AgentState(TypedDict):
 ### Step 3: 接入多模型调用层（伪流式渲染）
 
 - **指令**：
-  - 在 `src/cagent/llm.py` 封装 `chat(messages: list, tools: list | None = None) -> dict`，底层调用：
+  - 在 `src/baicode/llm.py` 封装 `chat(messages: list, tools: list | None = None) -> dict`，底层调用：
     ```python
     litellm.completion(model="deepseek/deepseek-chat", messages=..., tools=..., stream=False)
     ```
@@ -127,7 +127,7 @@ class AgentState(TypedDict):
 ### Step 4: 实现 Python 原生执行器工具
 
 - **指令**：
-  - `src/cagent/tools/python_exec.py` 暴露 `run_python(code: str) -> dict`。
+  - `src/baicode/tools/python_exec.py` 暴露 `run_python(code: str) -> dict`。
   - 在项目根目录隐式创建 `.workspace/`，每次将代码**覆盖写入** `.workspace/temp_exec.py`（不主动清理，便于事后查验）。
   - 用 `subprocess.run([sys.executable, ".workspace/temp_exec.py"], capture_output=True, text=True, timeout=10)` 在**当前激活 venv** 中执行。
   - 返回 `{"stdout": str, "stderr": str, "returncode": int}`；超时时 `stderr` 显式标注 `"TIMEOUT after 10s"`。
@@ -140,7 +140,7 @@ class AgentState(TypedDict):
 ### Step 5: 实现 Web 搜索工具
 
 - **指令**：
-  - `src/cagent/tools/web_search.py` 暴露 `web_search(query: str) -> str`。
+  - `src/baicode/tools/web_search.py` 暴露 `web_search(query: str) -> str`。
   - 调用 `tavily-python`，提取 **Top-3** 结果，每条按 `"[url]\ncontent\n"` 拼接，**整体施加 4000 字符硬截断**保护上下文。
   - 在 `tools/schemas.py` 暴露 OpenAI tools schema（参数 `query: string`）。
 - **测试**：
@@ -155,9 +155,9 @@ class AgentState(TypedDict):
 ### Step 6: 定义状态图结构与基础节点
 
 - **指令**：
-  - `src/cagent/graph/state.py` 落地 §0.3 的 `AgentState`。
-  - `src/cagent/graph/nodes.py` 实现 `agent_node`：调用 `llm.chat(messages, tools=[python_exec_schema, web_search_schema])`，将返回 assistant message 追加到 `messages`，回写新 state。
-  - `src/cagent/graph/builder.py` 构建最小图：`START → agent_node → END`，预留条件边接口供 Step 7 接入。
+  - `src/baicode/graph/state.py` 落地 §0.3 的 `AgentState`。
+  - `src/baicode/graph/nodes.py` 实现 `agent_node`：调用 `llm.chat(messages, tools=[python_exec_schema, web_search_schema])`，将返回 assistant message 追加到 `messages`，回写新 state。
+  - `src/baicode/graph/builder.py` 构建最小图：`START → agent_node → END`，预留条件边接口供 Step 7 接入。
 - **测试**：
   - 通过起始点传入一条测试消息，验证图能完整走通并在终端获得最终回复（颜色按 §0.4）。
 
@@ -196,12 +196,12 @@ class AgentState(TypedDict):
   - 在 `pyproject.toml` 中配置入口脚本：
     ```toml
     [project.scripts]
-    cagent = "cagent.cli:main"
+    baicode = "baicode.cli:main"
     ```
   - `cli.py` 的 `main()` 使用 `Typer` 注册为默认命令（无子命令时直接进入 REPL）。
   - 在开发环境执行 `pip install -e .` 完成可编辑安装。
 - **测试**：
-  - 开启新独立终端，键入 `cagent`，断言瞬间进入 REPL。
+  - 开启新独立终端，键入 `baicode`，断言瞬间进入 REPL。
   - 在新终端中完整跑一遍 ReAct 流程（含工具调用 + 反思）。
 
 ---
@@ -210,7 +210,7 @@ class AgentState(TypedDict):
 
 > **目标**：把当前 `cli.py::render_typewriter` 的纯字符流打字机升级为**流式 Markdown 渲染器**：模型回复中的标题、粗体、斜体、列表、链接、行内代码以富文本呈现；围栏代码块走 pygments 语法高亮（主题 `monokai`）。
 >
-> **范围内**：仅改动 `src/cagent/cli.py`（`render_typewriter` 内部逻辑 + `_SYSTEM_PROMPT_TEMPLATE` 末尾追加一句）。**不新增源码文件**、**不新增第三方依赖**（pygments 是 Rich 的传递依赖，安装 Rich 时已带入）。
+> **范围内**：仅改动 `src/baicode/cli.py`（`render_typewriter` 内部逻辑 + `_SYSTEM_PROMPT_TEMPLATE` 末尾追加一句）。**不新增源码文件**、**不新增第三方依赖**（pygments 是 Rich 的传递依赖，安装 Rich 时已带入）。
 >
 > **设计取舍**（覆盖 §0.4 表格中 Response 行的 "green 打字机" 决策）：
 >
@@ -223,7 +223,7 @@ class AgentState(TypedDict):
 - **指令**：
   - 在已激活 venv 内用 `pip show pygments` 确认 pygments 已被 Rich 传递安装；用 `pip show rich` 确认 Rich 版本满足 `pyproject.toml` 中的 `>=13.7.0`。**不要**把 pygments 显式加进 `pyproject.toml`。
   - 准备一段一次性 Markdown 探针字符串，至少包含以下元素：1 个 `##` 标题、1 段含粗体与斜体的句子、1 段含行内代码的句子、1 个无序列表（≥3 项）、1 个标注 `python` 的围栏代码块、1 行含 `<` `>` `&` 特殊字符的纯文本。
-  - 在 venv 内用一次性 `python -c` 把探针字符串交给 `rich.markdown.Markdown` 并通过 `rich.console.Console().print(...)` 输出。**只验证 Rich 本身的渲染行为，不接入 cagent 任何模块**。
+  - 在 venv 内用一次性 `python -c` 把探针字符串交给 `rich.markdown.Markdown` 并通过 `rich.console.Console().print(...)` 输出。**只验证 Rich 本身的渲染行为，不接入 baicode 任何模块**。
 - **测试**：
   - 肉眼检查终端输出：标题字号或粗细可见、粗体加粗、斜体倾斜、行内代码有底色框、列表带圆点、围栏代码块出现 monokai 配色的关键字与字符串高亮、`<` `>` `&` 三字符正常显示且未引发 traceback。
   - 任意一项不通过：检查 Rich/pygments 是否真的装到当前 venv（不是系统 Python）；版本不达标则在本 Step 内升级，**不进入 Step 11**。
@@ -231,7 +231,7 @@ class AgentState(TypedDict):
 ### Step 11：把 `render_typewriter` 改造为流式 Markdown 渲染器
 
 - **指令**：
-  - 在 `src/cagent/cli.py` 修改既有的 `render_typewriter(text, console, style=..., delay=...)`：
+  - 在 `src/baicode/cli.py` 修改既有的 `render_typewriter(text, console, style=..., delay=...)`：
     - 保持函数名、形参顺序、调用方位置完全不变（`cli.py::main()` 唯一调用点不动）。
     - 把 `style` 形参的默认值由 `"green"` 改为 `None`，并在文档/注释里说明：自 Phase 5 起 `style` 仅作 fallback，整体不再强制染色，Markdown 内部样式优先。
   - 函数内部实现要点（**自然语言描述，禁止本文档出现真实 Python 代码**）：
@@ -273,7 +273,7 @@ class AgentState(TypedDict):
 
 - **指令**：
   - `cli.py::main()` 不做任何代码改动；`render_typewriter` 的对外签名已保持兼容。
-  - 在真实终端启动 `cagent`，依次输入下面两条用户消息，**每条独立观察**：
+  - 在真实终端启动 `baicode`，依次输入下面两条用户消息，**每条独立观察**：
     1. "请用 Markdown 列出 Python 中常见的循环结构（for 和 while），并为每种结构给一个简短的 Python 代码示例。"
     2. "用三句话解释什么是大整数运算，请把其中两个关键术语用粗体标出。"
 - **测试**：
@@ -313,7 +313,7 @@ class AgentState(TypedDict):
 
 - `cli.py::render_typewriter` 已替换为流式 Markdown 渲染器，签名兼容、调用点不变。
 - 附录 A 的 6 项手动验证清单在 Phase 5 完成后**全部重跑 1 次**仍通过。
-- 仅 1 个源码文件被改动：`src/cagent/cli.py`（render_typewriter 内部逻辑 + system prompt 末尾追加 1 句）。
+- 仅 1 个源码文件被改动：`src/baicode/cli.py`（render_typewriter 内部逻辑 + system prompt 末尾追加 1 句）。
 - 无新增源码文件、无新增第三方依赖。
 - `memory-bank/progress.md` 与 `memory-bank/architecture.md` 已同步更新：标注 §0.4 表格中 "Response → green 打字机" 已被覆盖为 "Response → Markdown 流式渲染 + monokai 代码高亮"；记录 Step 12 最终选用的节流方案（A 或 B）以及 Step 15 是否触发"已知限制"分支。
 
@@ -328,7 +328,7 @@ class AgentState(TypedDict):
 | 3 | REPL 输入态按 Ctrl+C | 打印退出提示，干净结束 |
 | 4 | 工具执行态按 Ctrl+C | 子进程被杀、REPL 存活、模型收到中断 Observation |
 | 5 | 连续 3 次工具失败 | 第 4 次循环被强制中断，提示 "Reflection retries exceeded" |
-| 6 | 新终端键入 `cagent` | 行为与 `python -m cagent.cli` 完全一致 |
+| 6 | 新终端键入 `baicode` | 行为与 `python -m baicode.cli` 完全一致 |
 
 ## 附录 B：MVP 明确不做的事
 

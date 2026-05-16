@@ -7,10 +7,10 @@ from typing import Any
 
 from rich.console import Console
 
-from cagent.llm import chat
-from cagent.tools.python_exec import run_python
-from cagent.tools.schemas import ALL_SCHEMAS
-from cagent.tools.web_search import web_search
+from baicode.llm import chat
+from baicode.tools.python_exec import run_python
+from baicode.tools.schemas import ALL_SCHEMAS
+from baicode.tools.web_search import web_search
 
 _console = Console()
 

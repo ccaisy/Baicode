@@ -11,5 +11,5 @@ dist/
 .venv/
 venv/
 
-# cagent 运行时
+# baicode 运行时
 .workspace/
