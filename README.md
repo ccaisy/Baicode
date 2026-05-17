@@ -2,14 +2,7 @@
 
 > 一个 terminal-native 的 CLI AI Coding Agent —— 让大模型在本地终端里直接思考、写代码、调工具、跑命令。
 
-```
- ██████╗  █████╗ ██╗ ██████╗ ██████╗ ██████╗ ███████╗
- ██╔══██╗██╔══██╗██║██╔════╝██╔═══██╗██╔══██╗██╔════╝
- ██████╔╝███████║██║██║     ██║   ██║██║  ██║█████╗
- ██╔══██╗██╔══██║██║██║     ██║   ██║██║  ██║██╔══╝
- ██████╔╝██║  ██║██║╚██████╗╚██████╔╝██████╔╝███████╗
- ╚═════╝ ╚═╝  ╚═╝╚═╝ ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝
-```
+![baicode banner](docs/banner.png)
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/) [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE) [![Model](https://img.shields.io/badge/Model-DeepSeek--v4--flash-purple.svg)](https://platform.deepseek.com/)
 
@@ -32,35 +25,8 @@ baicode 是基于 [LangGraph](https://github.com/langchain-ai/langgraph) + [Lite
 | **Reflection 自愈** | 工具失败自动反思修正，3 次预算内自动重试；超限友好降级 |
 | **Replanner 动态修补** | 复杂任务某步失败时，LLM 决策插入补救步或 abort，避免死循环 |
 | **Rich Markdown 渲染** | 流式打字机 + 标题/列表/粗体/代码块 monokai 高亮；4000 字回复秒级渲染 |
-| **Ctrl+C 三级中断** | 输入态：干净退出；工具态：杀子进程保 REPL；渲染态：仅换行收尾 |
+| **Ctrl+C 三级中断** | 输入态：干净退出；工具态:杀子进程保 REPL；渲染态：仅换行收尾 |
 | **真实工作目录** | 工具操作直接落在用户启动 `baicode` 的目录，所见即所得 |
-
-## Demo
-
-启动后看到的样子：
-
-```
- ██████╗  █████╗ ██╗ ██████╗ ██████╗ ██████╗ ███████╗
- ...
-  model: deepseek/deepseek-v4-flash  ·  cwd: ~/projects/myrepo
-  Alt+Enter to submit  ·  Ctrl+C to exit
-
-You ▷ 在当前目录新建 demo/ 写一个能输出前 10 个斐波那契数的 fib.py 并运行验证
-
-📋 Plan
-┌──────────────────────────────────────────────────┐
-│ 1. 创建 demo/ 目录                                │
-│ 2. 写 demo/fib.py                                 │
-│ 3. 运行 fib.py 验证输出                           │
-└──────────────────────────────────────────────────┘
-
-▶ Step 1/3: 创建 demo/ 目录
-▶ Step 2/3: 写 demo/fib.py
-▶ Step 3/3: 运行 fib.py 验证输出
-
-已为你创建 demo/fib.py 并运行通过。前 10 个斐波那契数：
-1, 1, 2, 3, 5, 8, 13, 21, 34, 55
-```
 
 ## 快速开始
 
