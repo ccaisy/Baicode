@@ -268,15 +268,19 @@ user_input  ──► strip / 空串跳过
 
 ### 2.11 `graph/state.py` — AgentState 定义
 
-**角色**：LangGraph 节点间流转的 `TypedDict`。
+**角色**：LangGraph 节点间流转的 `TypedDict`。Phase 7 起，宏图与微图共用同一份 `AgentState`，新增 4 个字段服务宏图层。
 
 | 字段 | 类型 | 由谁初始化 | 含义 |
 | --- | --- | --- | --- |
-| `messages` | `list` | `builder.run` | 完整对话序列（含 assistant.tool_calls / role="tool" 结果 / reasoning_content） |
-| `error_count` | `int` | `builder.run`（=0） | 当轮 user 内累计的工具失败次数。触发条件：`python_exec.stderr` 非空 / `shell_exec` **超时**（`returncode == -1`）或抛 Python 异常 / 任何 tool 抛通用异常 / JSON 解析失败 / 未知工具名。**`shell_exec` 的非 0 returncode 不计入**（grep 无匹配 / test 失败这类是正常业务输出） |
-| `retry_limit` | `int` | `builder.run`（=3） | `error_count >= retry_limit` → `ReflectionRetriesExceeded` |
-| `tool_calls_count` | `int` | `builder.run`（=0） | 当轮 user 内 `tool_node` 被调用的总次数（按节点 +1，不按子调用） |
-| `max_tool_calls` | `int` | `builder.run`（=5） | `tool_calls_count >= max_tool_calls` 且模型仍想调工具 → `ToolCallBudgetExceeded` |
+| `messages` | `list` | `builder.run`（宏图）/ `_run_micro`（微图内部） | **宏图层**：`[system, user, ..., assistant_final]`（assistant_final 由 Finalizer 产出）。**微图层**：每次进入 Executor 时构造的"全新单步对话"（system+addendum, user(history_brief+task)），微图内部 tool_call / reasoning_content 等都只活在这段隔离 messages 中，宏图层不可见 |
+| `error_count` | `int` | 宏图 `builder.run`（=0）/ 微图 `_run_micro`（=0） | **每个 Executor 单步内部**累计的工具失败次数。`python_exec.stderr` 非空 / `shell_exec` 超时（`returncode==-1`）或抛 Python 异常 / 任何 tool 抛异常 / JSON 解析失败 / 未知工具名 → ++。**`shell_exec` 的非 0 returncode 不计入**（grep 无匹配 / test 失败这类是正常业务输出）。`error_count >= retry_limit` → 微图抛 `ReflectionRetriesExceeded`，被 `executor_node` 捕获转 history failed 条目 |
+| `retry_limit` | `int` | `builder.run`（=3） | 每步反思上限 |
+| `tool_calls_count` | `int` | 同上（=0） | 每个 Executor 单步内部 `tool_node` 被调用的总次数 |
+| `max_tool_calls` | `int` | `builder.run`（=5） | 每步工具调用上限 |
+| **`plan`** | `list[str]` | `builder.run`（=`[]`），由 Planner / Replanner 写入 | **宏图字段**：待执行任务清单 FIFO，Executor 每步从 `plan[0]` 取并弹首项 |
+| **`history`** | `list[dict]` | `builder.run`（=`[]`），由 Executor 追加 | **宏图字段**：已完成步骤清单。每条形如 `{"task": str, "summary": str, "status": "success" \| "failed"}`。Replanner 与 Finalizer 都读这个字段 |
+| **`replan_count`** | `int` | `builder.run`（=0），由 Replanner ++ | **宏图字段**：已发生的重规划次数 |
+| **`max_replans`** | `int` | `builder.run`（=3） | **宏图字段**：重规划上限。`replan_count >= max_replans` 且步骤失败时，宏图直接路由 Finalizer 而非 Replanner，防止死循环 |
 
 ---
 
@@ -300,27 +304,31 @@ user_input  ──► strip / 空串跳过
 - JSON 解析失败：`json.JSONDecodeError` → `error_count++` + 回填错误提示，**不中断循环**（多 tool_call 场景仍能处理后续调用）。
 - 任何工具抛 Python 异常（含 `OSError` / Tavily 异常 / subprocess 启动失败等）：`except Exception` → `error_count++` + 回填 `Tool '...' raised XError: ...`。
 - `KeyboardInterrupt`（implement_plan §0.5 落实点）：当前 tool_call 回填 `"Tool execution interrupted by user."`；后续所有 tool_call 回填 `"Tool execution skipped due to earlier interrupt."`；`break` 跳出循环；**不冒泡，REPL 保持存活**。子进程的 kill 由 `subprocess.run` 自身完成。**shell_exec 100% 复用此中断逻辑**，未单独实现。
-- 模块顶部 `_console = Console()` 单例；与 `cli.py` 的 Console 不同实例但同写 stdout，Rich 内部安全。
+- 模块顶部 `_console = Console()` 单例；与 `cli.py` 的 Console 不同实例但同写 stdout，Rich 内部安全。**Phase 7 起，Planner / Executor / Replanner / Finalizer 4 个宏图节点全部复用本单例**（共享同一 stdout，视觉风格统一）。
 
 #### nodes.py 依赖关系
 
 - 上游依赖：`rich.console.Console` + `baicode.llm.chat` + `baicode.tools.{python_exec, web_search, shell_exec, schemas}`。
-- 被谁调：`graph.builder.build_graph()` 注册为 `"agent"` / `"tool"` 节点。
+- 被谁调：Phase 1-6 由 `graph.builder._build_micro_graph()` 注册为 `"agent"` / `"tool"` 节点；Phase 7 起仅被 Executor 内部的 `_run_micro` 间接调起。
 
 ---
 
-### 2.13 `graph/builder.py` — 图构建 + 条件边路由 + REPL 入口
+### 2.13 `graph/builder.py` — 图构建 + 路由 + REPL 入口（Phase 1-6 微图 + Phase 7 宏图）
 
 #### builder.py 关键导出
 
 | 名字 | 类型 / 签名 | 作用 |
 | --- | --- | --- |
-| `ReflectionRetriesExceeded` | `RuntimeError` 子类 | 工具失败 ≥ `retry_limit` |
-| `ToolCallBudgetExceeded` | `RuntimeError` 子类 | 工具调用 ≥ `max_tool_calls` 且模型仍想调 |
-| `build_graph()` | `() -> CompiledGraph` | 装 `START → agent` + 两组条件边；模块外**不需要**自己持有图实例（`run()` 内部每次新建，开销小） |
-| `run(messages, retry_limit=3, max_tool_calls=5)` | REPL 入口 | 执行整张图、检查 final state、抛超限异常或返回完整 messages |
+| `ReflectionRetriesExceeded` | `RuntimeError` 子类 | 工具失败 ≥ `retry_limit`。**Phase 7 起仅在 Executor 内部抛出并被同节点捕获**，不再冒泡到 CLI（CLI 仍保留 except 分支作防御兜底） |
+| `ToolCallBudgetExceeded` | `RuntimeError` 子类 | 工具调用 ≥ `max_tool_calls` 且模型仍想调。同上 |
+| `run(messages, retry_limit=3, max_tool_calls=5, max_replans=3)` | **公共宏图入口** | Phase 7 起本函数装配宏图。签名向后兼容（新增 `max_replans` 通过默认值无缝接入），cli.py `graph_run(messages)` 调用点无需改动 |
+| `_build_micro_graph()` | 私有 | Phase 1-6 的 `agent ↔ tool` 微图；模块外仅由 `_run_micro` 调起 |
+| `_run_micro(messages, retry_limit, max_tool_calls)` | 私有 | Phase 1-6 的 REPL 入口同名函数，Phase 7 起改名+私有化。**仅 `executor_node` 内部调起**，每次注入"全新 executor_messages"。检查 final state 抛 `ReflectionRetriesExceeded` / `ToolCallBudgetExceeded`，让 `executor_node` 用 try/except 转 history failed |
+| `_build_macro_graph()` | 私有 | Phase 7 宏图：`START → planner → {react \| executor} → (react→END) / (executor↔replanner→finalizer) → END`。**5 个节点函数都在函数体内 deferred import**（避免 builder→planner/react/executor/replanner/finalizer→builder 的传递循环） |
 
 #### builder.py 图结构
+
+**微图（Phase 1-6，复用零修改）**：
 
 ```text
 START ──► agent ──┬──► tool ──┬──► agent      (常规 ReAct 回路)
@@ -329,13 +337,168 @@ START ──► agent ──┬──► tool ──┬──► agent      (常
                   └──► END                    (last 有 tool_calls 但 tool_calls_count ≥ max → exceeded)
 ```
 
-- 路由函数 `_route_after_agent` 返回 `"tool"` / `"end"` / `"exceeded"`；`_route_after_tool` 返回 `"agent"` / `"exceeded"`；`"exceeded"` 与 `"end"` 都映射到 `END`，由 `run()` 事后检查 state 区分。
-- `_RECURSION_LIMIT = 50` 防止 LangGraph 死循环兜底；正常情况下 `retry_limit` / `max_tool_calls` 会先触发。
+**宏图（Phase 7 新增；偏离 14 后含 react 分诊分支）**：
+
+```text
+START → planner ──┬─► react ──► END                            (Planner 输出 0/1 step：chitchat / 单步任务，无 Plan UX)
+                  │
+                  └─► executor ──┬─► executor    (plan 仍非空，跑下一步)
+                                 ├─► replanner ──┬─► executor    (插补救后继续)
+                                 │               └─► finalizer   (replanner 选 abort)
+                                 └─► finalizer    (plan 空，全部完成)
+
+finalizer → END
+```
+
+#### builder.py 路由函数
+
+| 路由 | 来源 | 返回 | 判断逻辑 |
+| --- | --- | --- | --- |
+| `_route_after_agent` | 微图 | `"tool"` / `"end"` / `"exceeded"` | last 有 tool_calls 且预算未耗尽 → tool；预算耗尽 → exceeded；否则 → end。`"exceeded"` 与 `"end"` 都映射 END，由 `_run_micro` 事后检查 state 区分 |
+| `_route_after_tool` | 微图 | `"agent"` / `"exceeded"` | `error_count >= retry_limit` → exceeded；否则 → agent |
+| `_route_after_planner` | 宏图 | `"react"` / `"executor"` | `len(plan) >= 2` → executor（plan 模式）；否则 → react（0/1 step 走 react 直通，progress 偏离 14） |
+| `_route_after_executor` | 宏图 | `"executor"` / `"replanner"` / `"finalizer"` | `history[-1].status == "failed"` 且 `replan_count < max_replans` → replanner；`plan == []` → finalizer；否则 → executor（下一步）|
+| `_route_after_replanner` | 宏图 | `"executor"` / `"finalizer"` | `plan == []` → finalizer（Replanner 选 abort）；否则 → executor |
+
+#### builder.py 其他约定
+
+- `_RECURSION_LIMIT = 50` 兜底 LangGraph 死循环；正常情况 `retry_limit` / `max_tool_calls` / `max_replans` 都会先触发。
+- 宏图层**不再**事后检查 `error_count` / `tool_calls_count` 超限——Executor 内部已经吃掉这两个异常并转 history。`run()` 公共入口正常路径不会抛 `ReflectionRetriesExceeded` / `ToolCallBudgetExceeded`。
 
 #### builder.py 依赖关系
 
-- 上游依赖：`langgraph.graph.StateGraph` + `baicode.graph.{nodes, state}`。
-- 被谁调：`cli.py::main()` 主循环。
+- 上游依赖：`langgraph.graph.StateGraph` + `baicode.graph.{nodes, state}` + （deferred）`baicode.graph.{planner, executor, replanner, finalizer}`。
+- 被谁调：`cli.py::main()` 主循环唯一调 `run`；`executor.py` 调 `_run_micro` + import 2 个异常类。
+
+---
+
+### 2.14 `graph/planner.py` — Planner 节点（Phase 7 新增）
+
+**角色**：把用户最新输入拆成 0-5 步任务清单，写入 `state["plan"]`。是宏图的起点（紧接 `START` 之后）。
+
+#### planner.py 关键导出
+
+| 名字 | 签名 / 类型 | 作用 |
+| --- | --- | --- |
+| `PLAN_SCHEMA` | `dict` | OpenAI function calling schema，`function.name="submit_plan"`，参数 `steps: array of strings`、`rationale: string`。**仅 Planner 内部用**，不加入 `ALL_SCHEMAS`（避免主对话模型乱调） |
+| `planner_node(state) -> dict` | LangGraph 节点 | `Console.status("planning...", style=dim cyan)` + `chat([system+_PLANNER_PROMPT, user(state.messages[-1].content)], tools=[PLAN_SCHEMA])` → 解析 `submit_plan` 的 `steps` → 写 `state["plan"]` |
+| `_extract_steps(raw)` | 私有 helper | 从 chat 返回的 dict 中提取 `submit_plan` 的 steps（兼容 LiteLLM pydantic / dict 两种 tool_call 形态）。坏数据返回 `None` |
+| `_render_plan_panel(plan)` | 私有 helper | 通过 `nodes._console` 打印蓝边框 `Panel(numbered_list, title="📋 Plan")` |
+
+#### planner.py 行为约定
+
+- **JSON 解析失败兜底**：第 1 次失败 → 用追加 `_PLANNER_RETRY_HINT` 的 prompt 重试 1 次；第 2 次仍失败 → fallback 为 `plan=[user_request]`（单步，自动落入 react 直通路径；progress 偏离 11）。
+- **`_render_plan_panel` 阈值**：仅当 `len(plan) >= 2` 才打印蓝边框 Panel。0/1 step 静默（progress 偏离 14）——这样 react 路径（0/1 step）保持 Phase 1-6 原生 ReAct 视觉，无任何 plan 字样。
+- **prompt 设计要点**（偏离 14 之后）：★CRITICAL RULE 置顶——"总结 / 简述 / report / explain the result is NEVER its own step"；新增 2 条反例 few-shot（"搜新闻并简述" / "跑 script.py 看输出" → 1 step）；明确 "When unsure between 1 and N steps, prefer 1"。
+
+#### planner.py 依赖关系
+
+- 上游依赖：`rich.panel.Panel` + `baicode.graph.nodes._console` + `baicode.llm.chat`。
+- 被谁调：`_build_macro_graph` 注册为 `"planner"` 节点。
+
+---
+
+### 2.15 `graph/executor.py` — Executor 节点（Phase 7 新增）
+
+**角色**：每次进入时取 `plan[0]` 当前任务、用 `history` 拼背景，构造**全新 executor_messages**（隔离派），调用微图 `_run_micro` 跑一遍 ReAct 循环，提取末条 assistant content 作为 summary 写入 `history`，从 `plan` 弹首项。
+
+#### executor.py 关键导出
+
+| 名字 | 签名 / 类型 | 作用 |
+| --- | --- | --- |
+| `executor_node(state) -> dict` | LangGraph 节点 | 主入口。打印 `▶ Step N/M: <task>`（粗体蓝 + dim 任务描述），调 `_run_micro`，捕获 `ReflectionRetriesExceeded` / `ToolCallBudgetExceeded` 转 failed 条目，返回 `{history, plan, error_count=0, tool_calls_count=0}` |
+| `_format_history_brief(history)` | 公共 helper | 把 history 渲染为 `"1. [✓] task\n   → summary\n2. [✗] ..."` 形式。**被 Replanner / Finalizer 共用** |
+| `_build_executor_messages(current_task, history, base_system_prompt)` | 私有 helper | 构造 `[system+_EXECUTOR_ADDENDUM, user(history_brief+task)]` 单步对话 |
+| `_EXECUTOR_ADDENDUM` | `str` | 拼到 base system prompt 末尾，告知模型"你是 EXECUTOR MODE，只解决当前 task、不要规划下一步、最终回复用 1-3 句总结" |
+
+#### executor.py 行为约定
+
+- **隔离派 messages**：每步全新构造 `[system, user]` 两条消息，微图内部的 tool_call / reasoning / observation 都活在这段隔离序列里。微图返回后只把末条 assistant content 当 summary 抽取出来，原序列丢弃。
+- **预算每步重置**：通过 `_run_micro` 内部 invoke 时 `error_count=0` / `tool_calls_count=0` 实现；本节点返回 `error_count=0 / tool_calls_count=0` 是仅作宏图状态卫生，宏图本身不读这两个字段。
+- **失败转 history**：`_run_micro` 抛上述两个异常时 status="failed"，summary 含异常名 + 消息；其他情况 status="success"，summary 取末条 assistant content（空时填 `"(empty)"`）。其它异常（编程错误、KeyboardInterrupt）**不捕获**，照常冒泡到 CLI。
+- **Step 编号**：`step_num = len(history) + 1`、`total = step_num + len(plan) - 1`。Replanner 中途插补救步会让 `total` 动态增长。
+- **deferred import**：`from baicode.cli import _build_system_prompt` 在函数体内执行，避免 cli → builder → executor → cli 的模块加载期循环。
+
+#### executor.py 依赖关系
+
+- 上游依赖：`baicode.graph.builder.{_run_micro, ReflectionRetriesExceeded, ToolCallBudgetExceeded}` + `baicode.graph.nodes._console` + （deferred）`baicode.cli._build_system_prompt`。
+- 被谁调：`_build_macro_graph` 注册为 `"executor"` 节点；`_format_history_brief` 被 `replanner.py` / `finalizer.py` 共用 import。
+
+---
+
+### 2.16 `graph/replanner.py` — Replanner 节点（Phase 7 新增）
+
+**角色**：在 Executor 报告 step failed 时被宏图路由进入，决策"插入补救任务"还是"放弃整任务"。
+
+#### replanner.py 关键导出
+
+| 名字 | 签名 / 类型 | 作用 |
+| --- | --- | --- |
+| `REPLAN_SCHEMA` | `dict` | OpenAI function calling schema，`function.name="submit_replan"`，参数 `action: enum["insert_remedy","abort"]` + `new_plan: array of strings` + `rationale: string`。仅本节点内部用 |
+| `replanner_node(state) -> dict` | LangGraph 节点 | `Console.print("🔄 Replanning...")` + `chat([system+_REPLANNER_PROMPT, user(原始请求+全 history+失败 step+剩余 plan)], tools=[REPLAN_SCHEMA])` → 解析 action+new_plan → 替换 `state["plan"]` 并 `replan_count++` |
+| `_extract_replan(raw)` | 私有 helper | 解析 `submit_replan`，校验 action 在合法枚举内、new_plan 是 list；坏数据返回 `None` |
+| `_render_new_plan_panel(new_plan)` | 私有 helper | 通过 `nodes._console` 打印黄边框 `Panel(numbered_list, title="🔄 Revised Plan")`；空 plan 打印"Replanner aborted" 黄字 |
+
+#### replanner.py 行为约定
+
+- **JSON 解析失败兜底**：直接 `action="abort"` + `new_plan=[]` + `replan_count++`。让流程进入 Finalizer 报告部分完成。
+- **new_plan 语义**：当 action=insert_remedy 时，new_plan 是"完整的剩余 plan"（补救步在前 + 可能改写过的原剩余步），不是"补救步追加"。Replanner 的 prompt 已明确这一点。
+- **触发条件由宏图把控**：`_route_after_executor` 在 `history[-1].status == "failed"` 且 `replan_count < max_replans` 时才路由进来；本节点不需要再判 `max_replans`，自己只管 ++。
+
+#### replanner.py 依赖关系
+
+- 上游依赖：`rich.panel.Panel` + `baicode.graph.executor._format_history_brief` + `baicode.graph.nodes._console` + `baicode.llm.chat`。
+- 被谁调：`_build_macro_graph` 注册为 `"replanner"` 节点。
+
+---
+
+### 2.17 `graph/finalizer.py` — Finalizer 节点（Phase 7 新增）
+
+**角色**：宏图的终点节点。综合 `history` 调一次 LLM 用自然语言写出用户友好的最终回复，append 到 `state["messages"]`（被 cli.py `render_typewriter` 渲染）。
+
+#### finalizer.py 关键导出
+
+| 名字 | 签名 / 类型 | 作用 |
+| --- | --- | --- |
+| `finalizer_node(state) -> dict` | LangGraph 节点 | `Console.status("wrapping up...", style=dim cyan)` + `chat(...)` → assistant message append 到 messages |
+| `_FINALIZER_ADDENDUM` | `str` | 拼到 base system prompt 末尾，告知模型"你是 FINALIZER MODE，直面用户，把机器输出翻译成用户语言，承认未完成部分" |
+
+#### finalizer.py 行为约定
+
+- **chitchat 短路**：`history == []`（Planner 输出空 plan 的路径）→ finalizer messages 仅 `[system, user(原始请求)]`，**不带 addendum**，让 LLM 等价于 Phase 1-6 单轮对话直接回应。
+- **多步路径**：`history != []` → finalizer messages 形如 `[system+_FINALIZER_ADDENDUM, user("原始请求 + history_brief + 请给我友好回复")]`。
+- **`tools=None`**：Finalizer 强制纯文本输出，不再触发任何工具调用。即使模型想调工具，schema 不存在它也无从下手。
+- **deferred import**：与 executor.py 同理，函数体内 `from baicode.cli import _build_system_prompt`。
+
+#### finalizer.py 依赖关系
+
+- 上游依赖：`baicode.graph.executor._format_history_brief` + `baicode.graph.nodes._console` + `baicode.llm.chat` + （deferred）`baicode.cli._build_system_prompt`。
+- 被谁调：`_build_macro_graph` 注册为 `"finalizer"` 节点。**仅在 plan 模式（plan ≥ 2 step）路径终点被命中**——偏离 14 之后，0/1 step 走 react 不经过本节点。
+
+---
+
+### 2.18 `graph/react.py` — React 节点（Phase 7 偏离 14 新增）
+
+**角色**：Planner 判定 `len(plan) <= 1`（chitchat / 单步任务 / 解析失败兜底）时走的纯 ReAct 直通路径，等价于 Phase 1-6 行为。
+
+#### react.py 关键导出
+
+| 名字 | 签名 / 类型 | 作用 |
+| --- | --- | --- |
+| `react_node(state) -> dict` | LangGraph 节点 | 调 `_run_micro(state["messages"], retry_limit, max_tool_calls)`，把末条 assistant content 追加到宏图 messages |
+
+#### react.py 行为约定
+
+- **直跑用户原始 messages**：不构造 executor_messages、不附加 `_EXECUTOR_ADDENDUM`、不传 history_brief。agent 看到的就是 cli.py 喂进来的 `[system, user]`（或多轮的完整历史），与 Phase 1-6 一致。
+- **末条 assistant content 写回宏图**：微图返回的 messages 序列包含中间的 tool_calls / role="tool" 响应等，**只取最后一条 assistant 的 content** append 到 macro state["messages"]。这与 multi-step 的 Finalizer 输出形态一致——CLI 看到的每轮回复永远是干净的 `[system, user, ..., user_n, assistant_n]`。
+- **异常不捕获**：`ReflectionRetriesExceeded` / `ToolCallBudgetExceeded` 等微图异常**照常冒泡**到 cli.py，由既有 except 矩阵处理（红字提示 + `messages.pop()` 回滚 + REPL 继续）。这是 Phase 1-6 错误反馈契约的直接复用——0/1 step 没有 Replanner 兜底，反思能力靠微图自身的 `retry_limit=3`。
+- **无任何 UI 副作用**：不打印 Plan panel、不打印 ▶ Step 指示。视觉上只剩下 `agent_node` 的 `thinking...` spinner 与 `tool_node` 的 `Running tool...` spinner——与 Phase 1-6 完全一致。
+- **路由触发条件**：`_route_after_planner` 在 `len(plan) <= 1` 时返回 `"react"`，含 3 种情况：①Planner 输出 `[]`（chitchat）；②Planner 输出 1 step（含 1-action task）；③Planner JSON 解析失败 fallback 的 `[user_request]`。
+
+#### react.py 依赖关系
+
+- 上游依赖：`baicode.graph.builder._run_micro`。
+- 被谁调：`_build_macro_graph` 注册为 `"react"` 节点。
 
 ---
 
@@ -358,32 +521,47 @@ START ──► agent ──┬──► tool ──┬──► agent      (常
                 └──────┬───────┘
                        │ messages.append(user)
                        ▼
-              graph.builder.run(messages, retry_limit=3, max_tool_calls=5)
+       graph.builder.run(messages, retry_limit=3, max_tool_calls=5, max_replans=3)
                        │
                        ▼
-          ┌─────────  StateGraph  ─────────┐
-          │                                 │
-          ▼                                 ▼
-   agent_node (chat + tools=ALL_SCHEMAS)    tool_node (python_exec | web_search | shell_exec)
-          │                                 │
-          ▼                                 ▼
-        llm.chat                       tools.python_exec.run_python
-       (litellm)                       tools.web_search.web_search
-                                       tools.shell_exec.run_shell
-                                       (tavily-python + config.load_config + subprocess)
-
-                       │ updated_messages
+       ┌────────────  Macro StateGraph (Phase 7)  ──────────────┐
+       │                                                         │
+       ▼                                                         │
+  planner_node ──分诊──┬──► react_node ──► END                  │
+       │              │   (0/1 step：chitchat / 单步任务)        │
+       │              │                                          │
+       │              └──► executor_node ──► replanner_node     │
+       │                       │                  │              │
+       │                       │ _run_micro       │              │
+       │                       ▼                  └──► finalizer │
+       │             ┌── Micro StateGraph (Phase 1-6) ──┐       │
+       │             │                                   │       │
+       │             ▼                                   ▼       │
+       │         agent_node ◄────────────────── tool_node        │
+       │             │                              │             │
+       │             ▼                              ▼             │
+       │          llm.chat                  tools.python_exec.run_python
+       │          (litellm)                 tools.web_search.web_search
+       │                                     tools.shell_exec.run_shell
+       │                                                          │
+       └─chat(tools=[PLAN_SCHEMA])      chat(tools=[REPLAN_SCHEMA])
+                                                                  │
+                       │ updated_messages [system, user, ..., assistant_final]
                        ▼
-              cli.render_typewriter (rich Live + Text)
+              cli.render_typewriter (rich Live + Markdown)
 ```
 
-- **单向依赖、无环**。
-- `cli` 持有 `messages` 主权，每轮 user 后调 `graph_run` 拿回完整序列并覆盖。
+- **单向依赖、无环**（循环导入靠 deferred import 避开）。
+- `cli` 持有 `messages` 主权，每轮 user 后调 `graph_run` 拿回完整序列并覆盖。每轮 messages 终态为 `[system, u1, a1, ..., un, an]`，宏图内部的 plan / history / replan_count 不进入 messages、随 `run()` 返回消失。
 - `prompt_toolkit` / `rich` / `litellm` / `tavily` / `langgraph` 均为叶子依赖。
-- Phase 2 工具层 + Phase 3 图层闭环：`cli.main → graph.builder.run → graph.nodes.{agent,tool}_node → llm.chat / tools.*`。
+- Phase 7 闭环（偏离 14 后）：`cli.main → graph.builder.run（宏图）→ planner_node → 分诊到 react_node 或 executor_node{_run_micro→agent_node↔tool_node} → (replanner_node) → (finalizer_node) → llm.chat / tools.*`。
+- **两条路径的视觉差异**：react 路径无 Plan panel / 无 ▶ Step 指示，与 Phase 1-6 ReAct 一致；plan 路径有 📋 Plan panel + ▶ Step k/N + （失败时）🔄 Replanning + 🔄 Revised Plan panel。
 
 ---
 
 ## 5. 待添加文件
 
-Phase 1-6 落地后，**implement_plan §0.1 列出的所有源码文件均已就位**，Phase 6 额外新增 `tools/shell_exec.py`（plan §0.1 目录树未列但属于 tools/ 自然扩展）。Phase 4 仅做产品化封装（`pip install -e .` 已可用、`pyproject.toml [project.scripts]` 已注册）、Phase 5 仅改动 `cli.py` 内部实现、Phase 6 新增 1 个源码文件 + 修改 3 个既有文件，均未引入新的第三方依赖。
+Phase 1-7 全部落地后，**implement_plan §0.1 + §Phase 7 列出的所有源码文件均已就位**：
+- Phase 6 额外新增 `tools/shell_exec.py`（plan §0.1 目录树未列但属于 tools/ 自然扩展）。
+- Phase 7 在 `graph/` 下新增 `planner.py` / `executor.py` / `replanner.py` / `finalizer.py` 4 个节点文件 + （偏离 14 实施后）`react.py`，共 **5 个新节点文件**。复用 `nodes.py` 单例 Console 与 `_run_micro` 入口。
+- Phase 4 仅做产品化封装、Phase 5 仅改动 `cli.py` 内部实现、Phase 6 新增 1 个源码文件 + 修改 3 个既有文件、**Phase 7 新增 5 个源码文件 + 修改 2 个既有文件**（state.py + builder.py），均未引入新的第三方依赖。

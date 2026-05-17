@@ -368,17 +368,118 @@ implement_plan Phase 6 采用"指令 + 验证测试"两栏制，没写死 timeou
 
 ---
 
-## 下一阶段（Phase 7+）— 未规划
+## Phase 7: Plan-and-Execute 宏观规划流 — ✅ 实施于 2026-05-17（代码完成，待真实 TTY 走查）
 
-implement_plan 至 Phase 6 全部落地。如继续推进，候选方向：
+### Phase 7 落地文件
 
-- Plan-and-Execute 多步规划（implement_plan 附录 B 中 MVP 明确推迟项）。
+- `src/baicode/graph/state.py`（**修改**）：`AgentState` TypedDict 新增 4 字段 `plan: list[str]` / `history: list[dict]` / `replan_count: int` / `max_replans: int`。
+- `src/baicode/graph/builder.py`（**修改**）：原 `build_graph`→`_build_micro_graph`、原 `run`→`_run_micro`（私有，仅 Executor 调）；新增 `_build_macro_graph` + 3 个路由函数 `_route_after_planner` / `_route_after_executor` / `_route_after_replanner`；新公共 `run(messages, retry_limit=3, max_tool_calls=5, max_replans=3)` 入口。
+- `src/baicode/graph/planner.py`（**新建**）：`PLAN_SCHEMA`、`planner_node`、JSON 解析失败 retry 1 次后 fallback 为 `[user_request]`、空 plan 不打印 Panel。
+- `src/baicode/graph/executor.py`（**新建**）：`_format_history_brief`、`_build_executor_messages`、`_EXECUTOR_ADDENDUM`、`executor_node`；内部 `_run_micro` 调用，捕获 `ReflectionRetriesExceeded` / `ToolCallBudgetExceeded` 转 history 的 failed 条目；deferred import `cli._build_system_prompt` 避免循环依赖。
+- `src/baicode/graph/replanner.py`（**新建**）：`REPLAN_SCHEMA`、`replanner_node`、JSON 解析失败 abort 兜底、Rich Panel 渲染"Revised Plan"。
+- `src/baicode/graph/finalizer.py`（**新建**）：`_FINALIZER_ADDENDUM`、`finalizer_node`；空 history 走 chitchat 短路（仅 system + user），非空 history 走完整摘要拼接；`tools=None` 强制纯文本输出。
+
+### Phase 7 关键设计点（用户拍板的 5 个核心决策）
+
+| # | 决策 | 落地方式 |
+| --- | --- | --- |
+| 1 | Planner 内置分诊（不在 CLI 层加分流） | `submit_plan` schema 接受 `steps=[]`/单步/3-5 步；prompt 内嵌 3 个 few-shot 例子覆盖 0/1/N |
+| 2 | State 极简扩展 | `plan: list[str]` + `history: list[dict]{task,summary,status}` + `replan_count` + `max_replans` |
+| 3 | 每步独立预算 + Replanner 捕获失败 | Executor 内 `try/except (ReflectionRetriesExceeded, ToolCallBudgetExceeded)` 转 failed 条目；`_route_after_executor` 根据 `last.status` + `replan_count` 决定路由 |
+| 4 | Executor messages 隔离派 | `_build_executor_messages` 每步构造全新 `[system+addendum, user(history_brief+task)]`；微图 state 独立、不污染宏图 |
+| 5 | 独立 Finalizer 节点 | 末尾 LLM 调用综合 history，`tools=None` 防止再触发工具；空 history 短路走原生单轮对话 |
+
+### Phase 7 关键实现细节
+
+- **宏图结构**：`START → planner → after_planner → {executor | finalizer} → after_executor → {executor | replanner | finalizer} → after_replanner → {executor | finalizer} → END`。
+- **微图复用零修改**：`agent_node` / `tool_node` 一行未动，仅通过被 `_run_micro` 包装、由 `executor_node` 调起。`agent_node` 已验证为纯读 `state["messages"]`，无隐藏状态依赖，因此每步注入全新 messages 完全干净。
+- **路由判定**：
+  - `_route_after_planner`：`plan == []` → finalizer；否则 executor。
+  - `_route_after_executor`：`history[-1].status == "failed" AND replan_count < max_replans` → replanner；`plan == []` → finalizer；否则 executor（下一步）。
+  - `_route_after_replanner`：`plan == []`（abort）→ finalizer；否则 executor。
+- **循环依赖处理**：`executor.py` / `finalizer.py` 在函数体内 `from baicode.cli import _build_system_prompt`（deferred import），避免 `cli → builder → executor → cli` 的模块加载期循环。同理 `_build_macro_graph` 内 deferred import 4 个节点函数，避免 `builder → planner/executor/... → builder` 的传递循环。
+- **CLI 视觉**：4 个新节点都通过 `nodes.py` 顶部既有的 `_console = Console()` 单例打印（与 `agent_node` 的 thinking spinner / `tool_node` 的 Running tool spinner 共享同一 Console，Rich 内部安全）。Planner 输出"📋 Plan" 蓝框 Panel；Executor 每步输出 `▶ Step N/M:` 高亮行（dim 任务描述）；Replanner 进入时 `🔄 Replanning...` 黄字 + 新 plan 黄框 Panel；Finalizer 不额外打印（最终回复由 `cli.render_typewriter` 渲染）。
+- **`run()` 签名向后兼容**：cli.py `graph_run(messages)` 调用点无需改动；新增 `max_replans=3` keyword-only 通过默认值无缝接入。
+
+### Phase 7 测试证据（mock LLM，cli.py 主循环不变）
+
+- ✅ **Planner 5 个单元 case**：chitchat→[]、单步→len=1、多步→len=3、broken JSON×2→fallback [user_request]、no tool_calls→fallback。
+- ✅ **Executor 5 个单元 case**：micro 成功→summary 取末条 assistant content + status=success、`ReflectionRetriesExceeded`→failed 条目+plan 弹首项、`ToolCallBudgetExceeded`→failed 条目、empty plan 防御兜底返回 `{}`、`_format_history_brief` 渲染正确。
+- ✅ **Replanner 4 个单元 case**：insert_remedy→新 plan + replan_count++、abort→空 plan + replan_count++、broken JSON→abort 兜底、replan_count 从 2 增到 3。
+- ✅ **Finalizer 3 个单元 case**：空 history→纯 chitchat 路径（仅 system+user，无 addendum）、3 步全成功→addendum 触发+综合自然语言回复、1 成功+1 失败→部分完成回复。
+- ✅ **宏图 5 个 e2e 集成 case**（mock 所有 LLM + `_run_micro`）：
+  - A. chitchat 走 Planner→Finalizer 直通；
+  - B. 单步成功 Planner→Executor→Finalizer；
+  - C. 3 步全成功 Planner→Executor×3→Finalizer，Step 编号 1/3 → 2/3 → 3/3 正确；
+  - D. 1 步失败 → Replanner 插入 pip install → 重试成功（执行 4 个微图调用、1 次 replan）；
+  - E. `max_replans=3` 上限触发 → 4 次 Executor + 3 次 Replanner 后停止进入 Finalizer，**无死循环**。
+- ✅ **CLI 兼容性自检**：`baicode.cli.main` import OK、`cli.graph_run is builder.run`、`run` 签名向后兼容（新增 `max_replans` 默认参数）、`_run_micro` 签名不变、`ReflectionRetriesExceeded` / `ToolCallBudgetExceeded` 仍公开导出供 cli 防御性 except。
+
+### Phase 7 偏离 implement_plan 的决策记录
+
+#### 偏离 10：Planner 与 Replanner 公用 `_console` 单例 + Rich `Panel` 渲染（plan 未指定样式）
+
+- **起因**：implement_plan §1 / §3 只说"用 Rich 库的列表或树状结构在终端醒目地打印出生成的全局计划"，未指定具体组件。
+- **决策**：Planner 用蓝边框 `Panel(numbered_list, title="📋 Plan")`；Replanner 用黄边框 `Panel(numbered_list, title="🔄 Revised Plan")`；二者都通过 `nodes.py::_console` 单例打印，与现有 thinking/Running spinner 共享 Console。
+- **影响范围**：纯展示层，不影响状态机逻辑。
+
+#### 偏离 11：Planner JSON 解析失败 fallback 为 `[user_request]` 而非空 plan
+
+- **起因**：plan 解析失败有两种合理 fallback：①空 plan 走 Finalizer（保守，让模型直接回应原始请求）；②单步 plan = 用户原文（让 Executor 自行 ReAct 处理）。
+- **决策**：选 ②。理由：用户请求可能是 multi-step 任务，落空 plan 会让 Finalizer 不调任何工具就回复，体验更差；落 `[user_request]` 至少让 Executor 自己跑一次 ReAct，绝大多数情况能完成。
+- **影响范围**：解析失败时的 UX；正常情况 Planner 输出 ≥99% 成功，几乎不触发。
+
+#### 偏离 12：Executor 失败时 status="failed" 的判定窄到只覆盖 `ReflectionRetriesExceeded` / `ToolCallBudgetExceeded`
+
+- **起因**：plan §2 说"若执行器报告该步骤彻底失败"未明定哪些失败算彻底失败。
+- **决策**：只在微图抛上述两个异常时记 failed；其他情况（如微图正常返回但 last assistant content 是错误提示）一律记 success。理由：Phase 1-6 的 tool_node 已经把工具的非致命错误回填给 agent，模型有机会在 retry_limit 预算内自愈；只有耗尽预算才算真失败。
+- **影响范围**：Replanner 触发频率；保守判定。
+
+#### 偏离 13：宏图 `recursion_limit = 50` 不变
+
+- **起因**：plan 未指定。
+- **决策**：保持 Phase 1-6 的 50。理由：`max_replans=3` × 5 步 plan = 最多 15-20 个节点调用，远小于 50；50 作为兜底足够。
+- **影响范围**：无（远未触发）。
+
+#### 偏离 14：0/1-step 走 react 直通路径，绕过 Executor / Finalizer（Phase 7 实施后用户反馈调整）
+
+- **起因**：实施完 Phase 7 首版后，用户测试 "搜一下今天的新闻并简述要点" 时观察到 Planner 把它拆成 ["搜索新闻", "简述要点"] 两步，触发完整 plan UX（📋 Plan panel + ▶ Step 1/2 + ▶ Step 2/2 + Finalizer 二次总结）。这是因为：①Planner prompt 中"不要拆 summarize 步"的规则被埋在 5 条规则末尾，模型读到时已被前置的"3-5 steps"等指令带偏；②即使 Planner 输出 1 step，原宏图仍要经 Executor 的 `_EXECUTOR_ADDENDUM` 包装 + Finalizer 二次总结，对单步任务过度工程。
+- **决策**：把 Planner 改造为"分诊台（triage）"，0/1-step（含 chitchat、单工具、解析失败兜底）走新增的 `react` 节点直跑微图、追加末条 assistant content 到宏图 messages、END；2+ step 保留完整 plan 路径（Executor / Replanner / Finalizer）。同时加固 Planner prompt：把"不要拆 summarize 步"提升为 ★CRITICAL RULE 置顶 + 新增反例 few-shot（"搜一下今天的新闻并简述" → 1 step）。
+- **落地文件**：
+  - **新增 `src/baicode/graph/react.py`**：`react_node`，~25 行；调 `_run_micro(state["messages"])`，异常**不捕获**（让 `ReflectionRetriesExceeded` / `ToolCallBudgetExceeded` 冒泡到 CLI，等价 Phase 1-6 行为）。
+  - **修改 `planner.py`**：`_PLANNER_PROMPT` 重写（★CRITICAL RULE 置顶 + 加 2 条反例 few-shot："搜新闻并简述" / "跑 script.py 看输出" → 1 step）；`_render_plan_panel` 在 `len(plan) <= 1` 时直接 return（不再打印 Plan panel）。
+  - **修改 `builder.py`**：`_route_after_planner` 新规则 `len(plan) >= 2 → "executor"` 否则 `"react"`；`_build_macro_graph` 注册 react 节点 + `react → END` 边。
+- **不再使用的代码（保留作防御）**：`finalizer.py` 中的"history==[] 走 chitchat 短路"分支变成 dead code（0-step 现在走 react，不走 finalizer），但代码保留，万一未来路由变更也能兜底。
+- **影响范围**：
+  - **视觉**：0/1-step 任务恢复 Phase 1-6 原生 ReAct 视觉（只有 thinking / Running tool spinner，无 Plan panel、无 ▶ Step）；2+ step 任务视觉不变。
+  - **Token 成本**：0/1-step 节省 1 次 Finalizer LLM 调用 + Executor addendum 的 ~300 token system prompt 增量。1-step 总成本 = Planner(1) + 微图 ReAct(1+)，与 Phase 1-6 ReAct 仅多 1 次 Planner。
+  - **行为**：0/1-step 没有 Replanner——单步失败直接报错（异常冒泡），由 cli.py 红字 + messages.pop() 回滚。这是有意为之：单步任务的反思能力由微图的 `retry_limit=3` 兜底；若需 Replanner 介入，Planner 应输出 2+ step。
+  - **多轮上下文**：react 路径只回写"末条 assistant content"到宏图 messages（不带 tool_call / tool 响应中间产物），与 multi-step 路径的 Finalizer 输出形态一致。多轮对话间上下文是干净的 `[system, u1, a1, u2, a2, ...]`。
+- **6 个 e2e 场景（mock LLM）全通过**：A 闲聊→react、B 1-step→react、C 3-step→plan、D 2-step+replan→plan、E max_replans=3 兜底、F 1-step react 异常冒泡。
+
+### Phase 7 已知限制（更新于偏离 14 之后）
+
+- **Ctrl+C 跨步骤无法中断整个 plan 剩余步骤**：tool_node 内部捕获 Ctrl+C 不冒泡（Phase 1-6 既有行为），所以宏图执行期间按 Ctrl+C 只能中断当前工具，无法让宏任务整体退出。MVP 接受，Phase 8 可考虑"取消信号"传播。
+- **History 长度无上限**：长任务下 `history: list[dict]` 会随 plan 步数线性膨胀。MVP 不做截断或 summarize，Phase 8 可加 LRU 或自动 summarize。
+- **Executor 单步 summary 质量依赖模型自觉**：若模型不遵守"1-3 句总结"指令而吐长篇大论，整段会被存为 summary。Replanner / Finalizer 仍能消化但 token 浪费。MVP 接受。
+- **Planner 模型与主对话同模型**：所有 LLM 调用（Planner / Executor 内的 agent / Replanner / Finalizer）都走 `deepseek/deepseek-v4-flash`。Phase 8 可分模型（Planner 用 reasoning 强的、Executor 用便宜的）。
+- **真实 TTY 走查留给接手者**：mock LLM 验证 100% 通过，但 implement_plan §7 的 7 项真实终端走查（chitchat / 简单算术 / 多步 fib.py / pip install 自愈 / max_replans 上限 / 北京天气 + 写文件 + cat 验证 / 多轮对话独立性）需在真实 REPL 与 DeepSeek API 上验证。脚本路径已在测试代码示例。
+
+---
+
+## 下一阶段（Phase 8+）— 未规划
+
+implement_plan 至 Phase 7 全部落地（代码侧）。如继续推进，候选方向：
+
 - pytest 自动化测试套件（附录 B 推迟项）。
-- 工具沙箱（Docker/容器隔离 `python_exec`）。
-- 多模型动态切换（命令式 `/model gemini/...` 之类）。
+- 工具沙箱（Docker/容器隔离 `python_exec` / `shell_exec`）。
+- 多模型动态切换（命令式 `/model gemini/...` 之类），Planner / Executor / Finalizer 分别选模型。
+- Ctrl+C 跨步骤中断信号传播。
+- History 长度上限 / 自动 summarize。
 
 ### 接手者请先做的事
 
-1. 阅读本文件全部历史决策（特别是偏离 1-9）。
-2. 阅读 `architecture.md` §2 各文件职责与 §4 依赖图。
-3. 跑 implement_plan 附录 A 的 6 项手动验证清单 + Phase 5 Step 13/15 + Phase 6 的 8 项端到端走查（详见本文件 Phase 6 测试证据）的真实 REPL 验证。
+1. 阅读本文件全部历史决策（特别是偏离 1-13）。
+2. 阅读 `architecture.md` §2 各文件职责与 §4 依赖图（含 Phase 7 宏图层）。
+3. 跑 implement_plan §7 的 7 项真实 TTY 走查（chitchat / 算术 / fib.py / 缺包自愈 / max_replans 上限 / 北京天气 / 多轮对话）。
+4. 跑回归走查：算术、web_search news、shell_exec `&&` 串联、Ctrl+C 工具内中断。

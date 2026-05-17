@@ -22,6 +22,46 @@ from .llm import ChatError, FatalAuthError
 
 HISTORY_PATH = str(Path.home() / ".baicode_history")
 
+_BANNER_LINES = (
+    " ██████╗  █████╗ ██╗ ██████╗ ██████╗ ██████╗ ███████╗",
+    " ██╔══██╗██╔══██╗██║██╔════╝██╔═══██╗██╔══██╗██╔════╝",
+    " ██████╔╝███████║██║██║     ██║   ██║██║  ██║█████╗  ",
+    " ██╔══██╗██╔══██║██║██║     ██║   ██║██║  ██║██╔══╝  ",
+    " ██████╔╝██║  ██║██║╚██████╗╚██████╔╝██████╔╝███████╗",
+    " ╚═════╝ ╚═╝  ╚═╝╚═╝ ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝",
+)
+_BANNER_COLORS = (
+    "#5e8bff",
+    "#7466ff",
+    "#8a41ff",
+    "#a02bff",
+    "#b620ff",
+    "#cc00ff",
+)
+
+
+def _display_cwd() -> str:
+    cwd = Path.cwd()
+    home = Path.home()
+    try:
+        rel = cwd.relative_to(home)
+    except ValueError:
+        return str(cwd)
+    return "~" if str(rel) == "." else f"~/{rel}"
+
+
+def _print_banner(console: Console, model: str) -> None:
+    for line, color in zip(_BANNER_LINES, _BANNER_COLORS):
+        console.print(line, style=f"bold {color}", highlight=False)
+    console.print()
+    console.print(
+        f"  [dim]model:[/dim] [cyan]{model}[/cyan]  [dim]·[/dim]  "
+        f"[dim]cwd:[/dim] [cyan]{_display_cwd()}[/cyan]"
+    )
+    console.print(
+        "  [dim]Alt+Enter to submit  ·  Ctrl+C to exit[/dim]"
+    )
+
 _SYSTEM_PROMPT_TEMPLATE = (
     "You are baicode, a terminal-native coding assistant.\n"
     "Today is {today}. Your training data is older than this — for ANY question "
@@ -115,13 +155,7 @@ def main() -> None:
         console.print(f"[red]启动失败：{e}[/red]")
         sys.exit(1)
 
-    console.print(
-        f"[bold green]baicode[/bold green] ready · model "
-        f"[cyan]{config.default_model}[/cyan]"
-    )
-    console.print(
-        "[dim]Alt+Enter 提交  ·  Ctrl+C 退出  ·  history: ~/.baicode_history[/dim]"
-    )
+    _print_banner(console, config.default_model)
 
     session: PromptSession[str] = PromptSession(
         multiline=True,
