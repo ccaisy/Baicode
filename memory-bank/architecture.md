@@ -91,7 +91,7 @@
 | --- | --- | --- |
 | `main()` | `() -> None` | `pyproject.toml [project.scripts] baicode` 注册的入口函数 |
 | `render_typewriter(text, console, style=None, delay=0.005)` | 渲染器 | 流式 Markdown 渲染器：`rich.markdown.Markdown(buf, code_theme="monokai")` + `Live.update`。字符级 `time.sleep(delay)` 维持打字机节奏，但 `live.update` **只在换行符或末尾字符触发**（Phase 5 Step 12 方案 B 节流）。`style` 形参降级为 fallback hook（Phase 5 起不再强制染色，Markdown 自身样式优先） |
-| `_SYSTEM_PROMPT_TEMPLATE` / `_build_system_prompt()` | `str` / `() -> str` | 模板含 `{today}` 占位符；启动时 `date.today().isoformat()` 注入（每次 `baicode` 启动重算，**明年用是明年的日期**）。模板内嵌：禁止使用训练记忆中具体日期/数字；`web_search` 不是结构化数据 API（天气/股价/航班/汇率遇到直接告知能力受限）；工具调用预算 5 次用完就停；**Phase 5 起**：模型输出代码必须使用带语言标注的围栏代码块以便 CLI 语法高亮；**Phase 6 起**：在工具清单中新增 `shell_exec` 段落，硬约束 cd 必须用 `&&` 串联（每次 shell 调用是独立子进程、无持久 CWD） + 禁交互式命令（vim/nano/less/more/top/htop/ssh-without-BatchMode） + 安装/包管理类命令必须非交互（`-y` / `--yes` / `--quiet` / `DEBIAN_FRONTEND=noninteractive`） |
+| `_SYSTEM_PROMPT_TEMPLATE` / `_build_system_prompt()` | `str` / `() -> str` | 模板含 `{today}` 占位符；启动时 `date.today().isoformat()` 注入（每次 `baicode` 启动重算，**明年用是明年的日期**）。模板内嵌：禁止使用训练记忆中具体日期/数字；**偏离 15 起** `web_search` / `shell_exec` 对实时结构化数据（天气/股价/航班/汇率/卫星实时图像/比分）升级为编号 HARD RULE（① 不要调工具拉；② 立即告知能力受限 + 替代方案；③ **已调 1 次没拿到结构化数据就 STOP**），含中文示例覆盖 H-01 / E-02 真实 prompt；工具调用预算 5 次用完就停；**Phase 5 起**：模型输出代码必须使用带语言标注的围栏代码块以便 CLI 语法高亮；**Phase 6 起**：在工具清单中新增 `shell_exec` 段落，硬约束 cd 必须用 `&&` 串联（每次 shell 调用是独立子进程、无持久 CWD） + 禁交互式命令（vim/nano/less/more/top/htop/ssh-without-BatchMode） + 安装/包管理类命令必须非交互（`-y` / `--yes` / `--quiet` / `DEBIAN_FRONTEND=noninteractive`） |
 | `HISTORY_PATH` | `str` 常量 | `~/.baicode_history` |
 
 #### cli.py 启动流程
@@ -477,27 +477,31 @@ finalizer → END
 
 ---
 
-### 2.18 `graph/react.py` — React 节点（Phase 7 偏离 14 新增）
+### 2.18 `graph/react.py` — React 节点（Phase 7 偏离 14 新增；偏离 15 引入 fail-soft）
 
-**角色**：Planner 判定 `len(plan) <= 1`（chitchat / 单步任务 / 解析失败兜底）时走的纯 ReAct 直通路径，等价于 Phase 1-6 行为。
+**角色**：Planner 判定 `len(plan) <= 1`（chitchat / 单步任务 / 解析失败兜底）时走的纯 ReAct 直通路径，等价于 Phase 1-6 行为；偏离 15 起对 `ToolCallBudgetExceeded` 加 fail-soft 兜底。
 
 #### react.py 关键导出
 
 | 名字 | 签名 / 类型 | 作用 |
 | --- | --- | --- |
-| `react_node(state) -> dict` | LangGraph 节点 | 调 `_run_micro(state["messages"], retry_limit, max_tool_calls)`，把末条 assistant content 追加到宏图 messages |
+| `react_node(state) -> dict` | LangGraph 节点 | 调 `_run_micro(state["messages"], retry_limit, max_tool_calls)`，把末条 assistant content 追加到宏图 messages；命中 `ToolCallBudgetExceeded` 时改用 `_BUDGET_EXCEEDED_FALLBACK` 作为末条 content |
+| `_BUDGET_EXCEEDED_FALLBACK` | `str` 常量 | 工具预算耗尽时的友好降级 markdown 回复（提示能力受限 + 列出实时结构化数据的替代渠道）|
 
 #### react.py 行为约定
 
 - **直跑用户原始 messages**：不构造 executor_messages、不附加 `_EXECUTOR_ADDENDUM`、不传 history_brief。agent 看到的就是 cli.py 喂进来的 `[system, user]`（或多轮的完整历史），与 Phase 1-6 一致。
 - **末条 assistant content 写回宏图**：微图返回的 messages 序列包含中间的 tool_calls / role="tool" 响应等，**只取最后一条 assistant 的 content** append 到 macro state["messages"]。这与 multi-step 的 Finalizer 输出形态一致——CLI 看到的每轮回复永远是干净的 `[system, user, ..., user_n, assistant_n]`。
-- **异常不捕获**：`ReflectionRetriesExceeded` / `ToolCallBudgetExceeded` 等微图异常**照常冒泡**到 cli.py，由既有 except 矩阵处理（红字提示 + `messages.pop()` 回滚 + REPL 继续）。这是 Phase 1-6 错误反馈契约的直接复用——0/1 step 没有 Replanner 兜底，反思能力靠微图自身的 `retry_limit=3`。
-- **无任何 UI 副作用**：不打印 Plan panel、不打印 ▶ Step 指示。视觉上只剩下 `agent_node` 的 `thinking...` spinner 与 `tool_node` 的 `Running tool...` spinner——与 Phase 1-6 完全一致。
+- **异常处理（偏离 15 后）**：
+  - `ToolCallBudgetExceeded`：**捕获 + 替换 last_content** 为 `_BUDGET_EXCEEDED_FALLBACK`。E-02 / H-01 之类实时结构化数据请求烧光预算时的 UX 兜底，避免红字穿透。捕获后 messages 仍正常 append 一条 assistant，CLI 端看不出区别（render_typewriter 正常渲染 markdown 回复）。
+  - `ReflectionRetriesExceeded`：**不捕获**，照常冒泡到 cli.py，由既有 except 矩阵处理（红字提示 + `messages.pop()` 回滚 + REPL 继续）。这是确定性的 3 次工具失败（语法/类型/真错误），保留红字让用户知道发生了什么。
+  - 其他异常（编程错误、KeyboardInterrupt 等）：**不捕获**，照常冒泡。
+- **无任何 UI 副作用**：不打印 Plan panel、不打印 ▶ Step 指示。视觉上只剩下 `agent_node` 的 `thinking...` spinner 与 `tool_node` 的 `Running tool...` spinner——与 Phase 1-6 完全一致。命中 fail-soft 时也无额外打印（fallback 文案直接走 render_typewriter）。
 - **路由触发条件**：`_route_after_planner` 在 `len(plan) <= 1` 时返回 `"react"`，含 3 种情况：①Planner 输出 `[]`（chitchat）；②Planner 输出 1 step（含 1-action task）；③Planner JSON 解析失败 fallback 的 `[user_request]`。
 
 #### react.py 依赖关系
 
-- 上游依赖：`baicode.graph.builder._run_micro`。
+- 上游依赖：`baicode.graph.builder.{_run_micro, ToolCallBudgetExceeded}`。
 - 被谁调：`_build_macro_graph` 注册为 `"react"` 节点。
 
 ---
