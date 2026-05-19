@@ -62,6 +62,38 @@ def _print_banner(console: Console, model: str) -> None:
         "  [dim]Alt+Enter to submit  ·  Ctrl+C to exit[/dim]"
     )
 
+if sys.platform == "win32":
+    _SHELL_EXEC_SECTION = (
+        "  - shell_exec(command): run a shell command via cmd.exe (60s timeout); "
+        "use for filesystem inspection (dir, type, where, findstr), git ops, "
+        "package management, log inspection — anything you'd type at a Windows "
+        "command prompt. Each call is an ISOLATED subprocess: there is NO "
+        "persistent CWD between calls, so a standalone `cd foo` is useless; "
+        "you MUST chain directory changes with && in a single command "
+        "(e.g. `cd foo && dir`, `mkdir x && cd x && echo. > y.txt`). "
+        "NEVER invoke interactive tools (vim, nano, less, more, top); "
+        "they will block the subprocess until timeout. "
+        "Install / package-manager commands MUST be made non-interactive: use "
+        "`--quiet` / `-y` / `--yes` flags "
+        "(e.g. `pip install --quiet pkg`, "
+        "`winget install --silent --accept-package-agreements pkg`).\n"
+    )
+else:
+    _SHELL_EXEC_SECTION = (
+        "  - shell_exec(command): run a shell command via /bin/sh (60s timeout); "
+        "use for filesystem inspection (ls, cat, find), git ops, package management, "
+        "log inspection — anything you'd type at a terminal. Each call is an "
+        "ISOLATED subprocess: there is NO persistent CWD between calls, so a "
+        "standalone `cd foo` is useless; you MUST chain directory changes with && "
+        "in a single command (e.g. `cd foo && ls`, `mkdir -p x && cd x && touch y`). "
+        "NEVER invoke interactive tools (vim, nano, less, more, top, htop, ssh "
+        "without -o BatchMode=yes); they will block the subprocess until timeout. "
+        "Install / package-manager commands MUST be made non-interactive: use "
+        "`-y` / `--yes` / `--quiet` flags (e.g. `apt-get install -y pkg`, "
+        "`pip install --quiet pkg`, `brew install --quiet pkg`) and where "
+        "applicable prefix with `DEBIAN_FRONTEND=noninteractive`.\n"
+    )
+
 _SYSTEM_PROMPT_TEMPLATE = (
     "You are baicode, a terminal-native coding assistant.\n"
     "Today is {today}. Your training data is older than this — for ANY question "
@@ -79,18 +111,7 @@ _SYSTEM_PROMPT_TEMPLATE = (
     "results. Set topic='news' for time-sensitive queries (latest releases, "
     "current events) so results are filtered by recency; keep topic='general' "
     "for docs lookup, technical references, error messages.\n"
-    "  - shell_exec(command): run a shell command via /bin/sh (60s timeout); "
-    "use for filesystem inspection (ls, cat, find), git ops, package management, "
-    "log inspection — anything you'd type at a terminal. Each call is an "
-    "ISOLATED subprocess: there is NO persistent CWD between calls, so a "
-    "standalone `cd foo` is useless; you MUST chain directory changes with && "
-    "in a single command (e.g. `cd foo && ls`, `mkdir -p x && cd x && touch y`). "
-    "NEVER invoke interactive tools (vim, nano, less, more, top, htop, ssh "
-    "without -o BatchMode=yes); they will block the subprocess until timeout. "
-    "Install / package-manager commands MUST be made non-interactive: use "
-    "`-y` / `--yes` / `--quiet` flags (e.g. `apt-get install -y pkg`, "
-    "`pip install --quiet pkg`, `brew install --quiet pkg`) and where "
-    "applicable prefix with `DEBIAN_FRONTEND=noninteractive`.\n"
+    "{shell_exec_section}"
     "\n"
     "IMPORTANT — web_search / shell_exec limits for realtime structured data:\n"
     "web_search returns news / web-page snippets, NOT a structured-data API. "
@@ -126,7 +147,10 @@ _SYSTEM_PROMPT_TEMPLATE = (
 
 
 def _build_system_prompt() -> str:
-    return _SYSTEM_PROMPT_TEMPLATE.format(today=date.today().isoformat())
+    return _SYSTEM_PROMPT_TEMPLATE.format(
+        today=date.today().isoformat(),
+        shell_exec_section=_SHELL_EXEC_SECTION,
+    )
 
 
 def render_typewriter(
