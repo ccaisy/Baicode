@@ -11,6 +11,14 @@ desktop.ini
 .env
 .env.*
 CLAUDE.md
+.claude/
+
+# ========================
+# understand-anything 中间产物（知识图谱核心文件保留提交）
+# ========================
+.understand-anything/intermediate/
+.understand-anything/tmp/
+.understand-anything/.trash-*/
 
 # ========================
 # Node.js

@@ -1,0 +1,1714 @@
+{
+  "version": "1.0.0",
+  "project": {
+    "name": "baicode",
+    "languages": [
+      "Python"
+    ],
+    "frameworks": [
+      "LangGraph",
+      "LiteLLM",
+      "Rich",
+      "prompt_toolkit",
+      "Tavily"
+    ],
+    "description": "Terminal-native CLI AI Coding Agent，基于 LangGraph + LiteLLM 构建，支持 Plan-and-Execute 双层图架构与三个原生工具。",
+    "analyzedAt": "2026-06-15T08:28:28.749233+00:00",
+    "gitCommitHash": "9d12c688d4fecc9eb9801e277d9aebc34aee93c9"
+  },
+  "nodes": [
+    {
+      "id": "file:src/baicode/cli.py",
+      "type": "file",
+      "name": "cli.py",
+      "filePath": "src/baicode/cli.py",
+      "summary": "REPL 入口：prompt_toolkit 交互输入、Rich Markdown 流式打字机渲染、顶层异常处理，维护多轮对话 messages 状态。",
+      "tags": [
+        "入口",
+        "REPL",
+        "CLI",
+        "Rich",
+        "prompt_toolkit"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:src/baicode/config.py",
+      "type": "file",
+      "name": "config.py",
+      "filePath": "src/baicode/config.py",
+      "summary": "加载 .env 文件并返回不可变 Config dataclass；缺少必要 API Key 时抛 MissingAPIKeyError。",
+      "tags": [
+        "配置",
+        "dotenv",
+        "dataclass"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/baicode/llm.py",
+      "type": "file",
+      "name": "llm.py",
+      "filePath": "src/baicode/llm.py",
+      "summary": "LiteLLM 封装层：chat() 统一返回 dict（含 reasoning_content）；二元异常分类：ChatError（可恢复）/ FatalAuthError（不可恢复）。",
+      "tags": [
+        "LLM",
+        "LiteLLM",
+        "API调用",
+        "DeepSeek"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/baicode/graph/builder.py",
+      "type": "file",
+      "name": "builder.py",
+      "filePath": "src/baicode/graph/builder.py",
+      "summary": "微图（ReAct）与宏图（Plan-and-Execute）的构建函数；路由逻辑；公共入口 run()；导出两个预算异常类。",
+      "tags": [
+        "LangGraph",
+        "图构建",
+        "路由",
+        "ReAct",
+        "Plan-Execute"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:src/baicode/graph/state.py",
+      "type": "file",
+      "name": "state.py",
+      "filePath": "src/baicode/graph/state.py",
+      "summary": "定义 AgentState TypedDict，包含微图字段（messages、error_count、tool_calls_count）与宏图字段（plan、history、replan_count）。",
+      "tags": [
+        "状态管理",
+        "TypedDict",
+        "LangGraph"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/baicode/graph/nodes.py",
+      "type": "file",
+      "name": "nodes.py",
+      "filePath": "src/baicode/graph/nodes.py",
+      "summary": "微图核心节点：agent_node 调用 LLM、tool_node 分发并执行三个工具；持有共享 _console 单例；含 Reflection 错误计数逻辑。",
+      "tags": [
+        "节点",
+        "agent_node",
+        "tool_node",
+        "Reflection",
+        "Rich"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:src/baicode/graph/planner.py",
+      "type": "file",
+      "name": "planner.py",
+      "filePath": "src/baicode/graph/planner.py",
+      "summary": "Planner 节点：将用户请求通过 function calling 拆分为 0-5 步任务清单；含重试与 fallback 逻辑；>=2 步时显示 Plan Panel。",
+      "tags": [
+        "Planner",
+        "function-calling",
+        "任务分解"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:src/baicode/graph/executor.py",
+      "type": "file",
+      "name": "executor.py",
+      "filePath": "src/baicode/graph/executor.py",
+      "summary": "Executor 节点：逐步从 plan 队列取任务，注入隔离 messages 后调用微图；捕获预算异常转为 history failed 条目。",
+      "tags": [
+        "Executor",
+        "步骤执行",
+        "微图调用"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:src/baicode/graph/replanner.py",
+      "type": "file",
+      "name": "replanner.py",
+      "filePath": "src/baicode/graph/replanner.py",
+      "summary": "Replanner 节点：步骤失败时 LLM 决策 insert_remedy（插入补救步）或 abort；替换宏图 plan 列表。",
+      "tags": [
+        "Replanner",
+        "容错",
+        "动态修补"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:src/baicode/graph/finalizer.py",
+      "type": "file",
+      "name": "finalizer.py",
+      "filePath": "src/baicode/graph/finalizer.py",
+      "summary": "宏图终点节点：综合 history 生成用户友好的最终 Markdown 回复；不触发工具调用（tools=None）。",
+      "tags": [
+        "Finalizer",
+        "最终回复",
+        "宏图"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/baicode/graph/react.py",
+      "type": "file",
+      "name": "react.py",
+      "filePath": "src/baicode/graph/react.py",
+      "summary": "0/1 step 直通路径节点：等价 Phase 1-6 纯 ReAct 行为；捕获 ToolCallBudgetExceeded 做 fail-soft 降级，给出友好提示。",
+      "tags": [
+        "ReAct",
+        "直通路径",
+        "降级处理"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/baicode/tools/python_exec.py",
+      "type": "file",
+      "name": "python_exec.py",
+      "filePath": "src/baicode/tools/python_exec.py",
+      "summary": "Python 执行工具：子进程运行代码，写入 .workspace/temp_exec.py，10 秒超时，返回 stdout/stderr/returncode。",
+      "tags": [
+        "工具",
+        "python_exec",
+        "子进程",
+        "代码执行"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/baicode/tools/shell_exec.py",
+      "type": "file",
+      "name": "shell_exec.py",
+      "filePath": "src/baicode/tools/shell_exec.py",
+      "summary": "Shell 执行工具：系统默认 shell 运行命令，60 秒超时，stdout/stderr 各 4000 字截断，每次独立无状态子进程。",
+      "tags": [
+        "工具",
+        "shell_exec",
+        "子进程",
+        "命令执行"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/baicode/tools/web_search.py",
+      "type": "file",
+      "name": "web_search.py",
+      "filePath": "src/baicode/tools/web_search.py",
+      "summary": "Tavily 网络搜索工具：Top-5 结果，整体 4000 字硬截断；支持 news topic 时效过滤。",
+      "tags": [
+        "工具",
+        "web_search",
+        "Tavily",
+        "搜索"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/baicode/tools/schemas.py",
+      "type": "file",
+      "name": "schemas.py",
+      "filePath": "src/baicode/tools/schemas.py",
+      "summary": "集中定义三个工具的 OpenAI function calling schema：PYTHON_EXEC_SCHEMA、WEB_SEARCH_SCHEMA、SHELL_EXEC_SCHEMA，导出 ALL_SCHEMAS 列表。",
+      "tags": [
+        "schema",
+        "function-calling",
+        "工具定义"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/baicode/__init__.py",
+      "type": "file",
+      "name": "__init__.py (baicode)",
+      "filePath": "src/baicode/__init__.py",
+      "summary": "baicode 包入口文件（空）。",
+      "tags": [
+        "包入口"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/baicode/graph/__init__.py",
+      "type": "file",
+      "name": "__init__.py (graph)",
+      "filePath": "src/baicode/graph/__init__.py",
+      "summary": "graph 子包入口文件（空）。",
+      "tags": [
+        "包入口",
+        "子包"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:src/baicode/tools/__init__.py",
+      "type": "file",
+      "name": "__init__.py (tools)",
+      "filePath": "src/baicode/tools/__init__.py",
+      "summary": "tools 子包入口文件（空）。",
+      "tags": [
+        "包入口",
+        "子包"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:eval_runner.py",
+      "type": "file",
+      "name": "eval_runner.py",
+      "filePath": "eval_runner.py",
+      "summary": "评测集运行器：45 个 case（A-L 共 12 章），覆盖路径分诊/ReAct/Plan/Reflection/Replanner/工具边界/多轮/鲁棒性，需真实 API Key。",
+      "tags": [
+        "评测",
+        "eval",
+        "测试",
+        "DeepSeek"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "config:pyproject.toml",
+      "type": "config",
+      "name": "pyproject.toml",
+      "filePath": "pyproject.toml",
+      "summary": "项目构建配置：setuptools 打包，注册 baicode CLI 命令，声明 Python 3.10+ 及 LangGraph/LiteLLM 等依赖。",
+      "tags": [
+        "构建",
+        "setuptools",
+        "依赖管理"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:.env.example",
+      "type": "config",
+      "name": ".env.example",
+      "filePath": ".env.example",
+      "summary": "环境变量示例文件：展示 DEEPSEEK_API_KEY 与 TAVILY_API_KEY 的配置格式。",
+      "tags": [
+        "环境变量",
+        "API Key",
+        "配置示例"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:.gitignore",
+      "type": "config",
+      "name": ".gitignore",
+      "filePath": ".gitignore",
+      "summary": "Git 忽略配置：排除 .env、__pycache__、.venv、dist、.workspace 等。",
+      "tags": [
+        "git",
+        "版本控制"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "config:.vscode/settings.json",
+      "type": "config",
+      "name": "settings.json (VS Code)",
+      "filePath": ".vscode/settings.json",
+      "summary": "VS Code 编辑器配置。",
+      "tags": [
+        "编辑器",
+        "VS Code"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:README.md",
+      "type": "document",
+      "name": "README.md",
+      "filePath": "README.md",
+      "summary": "项目主文档：简介、特性表格、快速开始、架构概览、工具说明、评测使用指南。",
+      "tags": [
+        "文档",
+        "快速开始",
+        "架构概览"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:CLAUDE.md",
+      "type": "document",
+      "name": "CLAUDE.md",
+      "filePath": "CLAUDE.md",
+      "summary": "Claude Code 协作指南：项目架构描述、关键文件职责表、重要约定（reasoning_content 回传、循环导入规避、shell_exec 无状态等）。",
+      "tags": [
+        "文档",
+        "Claude",
+        "AI协作"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:memory-bank/architecture.md",
+      "type": "document",
+      "name": "architecture.md",
+      "filePath": "memory-bank/architecture.md",
+      "summary": "架构设计文档：双层图结构详解、各节点数据流、Phase 演进记录、偏离说明。",
+      "tags": [
+        "架构",
+        "设计文档",
+        "双层图"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "document:memory-bank/eval.md",
+      "type": "document",
+      "name": "eval.md",
+      "filePath": "memory-bank/eval.md",
+      "summary": "评测文档：45 个 case 的设计原则、覆盖章节说明、历史通过率记录。",
+      "tags": [
+        "评测",
+        "文档",
+        "测试覆盖"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:memory-bank/implement_plan.md",
+      "type": "document",
+      "name": "implement_plan.md",
+      "filePath": "memory-bank/implement_plan.md",
+      "summary": "实现计划：Phase 1-8 各阶段目标、任务细节、完成标准。",
+      "tags": [
+        "规划",
+        "实现计划",
+        "Phase"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:memory-bank/product_requirements_document.md",
+      "type": "document",
+      "name": "product_requirements_document.md",
+      "filePath": "memory-bank/product_requirements_document.md",
+      "summary": "产品需求文档：目标用户、核心功能、非功能需求。",
+      "tags": [
+        "产品",
+        "PRD",
+        "需求"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:memory-bank/progress.md",
+      "type": "document",
+      "name": "progress.md",
+      "filePath": "memory-bank/progress.md",
+      "summary": "进度追踪：已完成 Phase、当前状态、架构偏离记录（15 条）、下一步计划。",
+      "tags": [
+        "进度",
+        "偏离记录",
+        "状态追踪"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:memory-bank/project_analysis.md",
+      "type": "document",
+      "name": "project_analysis.md",
+      "filePath": "memory-bank/project_analysis.md",
+      "summary": "项目分析文档：竞品对比、设计决策分析。",
+      "tags": [
+        "分析",
+        "竞品",
+        "决策"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "document:memory-bank/tech_stack.md",
+      "type": "document",
+      "name": "tech_stack.md",
+      "filePath": "memory-bank/tech_stack.md",
+      "summary": "技术栈说明：LangGraph、LiteLLM、Rich、prompt_toolkit 的选型理由与用法。",
+      "tags": [
+        "技术栈",
+        "LangGraph",
+        "LiteLLM"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/baicode/config.py:Config",
+      "type": "class",
+      "name": "Config",
+      "filePath": "src/baicode/config.py",
+      "summary": "不可变配置 dataclass，包含 deepseek_api_key、tavily_api_key、openai_api_key、default_model 字段。",
+      "tags": [
+        "dataclass",
+        "配置",
+        "不可变"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/baicode/config.py:MissingAPIKeyError",
+      "type": "class",
+      "name": "MissingAPIKeyError",
+      "filePath": "src/baicode/config.py",
+      "summary": "启动时缺少必要 API Key 抛出的异常，携带 key_name 属性。",
+      "tags": [
+        "异常",
+        "API Key",
+        "启动检查"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/baicode/llm.py:ChatError",
+      "type": "class",
+      "name": "ChatError",
+      "filePath": "src/baicode/llm.py",
+      "summary": "可恢复 LLM 错误（限流、网络异常等），CLI 捕获后 messages.pop() 重回输入。",
+      "tags": [
+        "异常",
+        "LLM",
+        "可恢复"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/baicode/llm.py:FatalAuthError",
+      "type": "class",
+      "name": "FatalAuthError",
+      "filePath": "src/baicode/llm.py",
+      "summary": "不可恢复鉴权失败异常，CLI 捕获后 sys.exit(1)。",
+      "tags": [
+        "异常",
+        "鉴权",
+        "不可恢复"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/baicode/graph/state.py:AgentState",
+      "type": "class",
+      "name": "AgentState",
+      "filePath": "src/baicode/graph/state.py",
+      "summary": "LangGraph 状态 TypedDict：微图字段（messages、error_count、tool_calls_count）+ 宏图字段（plan、history、replan_count、max_replans）。",
+      "tags": [
+        "TypedDict",
+        "状态",
+        "LangGraph"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/baicode/graph/builder.py:ReflectionRetriesExceeded",
+      "type": "class",
+      "name": "ReflectionRetriesExceeded",
+      "filePath": "src/baicode/graph/builder.py",
+      "summary": "工具失败次数达到 retry_limit 时抛出，上层捕获后弹出本次 user message 重回输入。",
+      "tags": [
+        "异常",
+        "Reflection",
+        "预算"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:src/baicode/graph/builder.py:ToolCallBudgetExceeded",
+      "type": "class",
+      "name": "ToolCallBudgetExceeded",
+      "filePath": "src/baicode/graph/builder.py",
+      "summary": "工具调用总次数超过 max_tool_calls 时抛出；react_node 捕获后 fail-soft 降级回复。",
+      "tags": [
+        "异常",
+        "工具预算",
+        "fail-soft"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/baicode/config.py:load_config",
+      "type": "function",
+      "name": "load_config",
+      "filePath": "src/baicode/config.py",
+      "summary": "加载 .env 并校验必要 Key，返回 Config 实例；缺 Key 抛 MissingAPIKeyError。",
+      "tags": [
+        "配置加载",
+        "dotenv"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/baicode/llm.py:chat",
+      "type": "function",
+      "name": "chat",
+      "filePath": "src/baicode/llm.py",
+      "summary": "统一 LLM 调用：litellm.completion 包装，含 2 次重试（限流），返回标准化 dict（含 reasoning_content）。",
+      "tags": [
+        "LLM调用",
+        "litellm",
+        "统一接口"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/baicode/graph/builder.py:_run_micro",
+      "type": "function",
+      "name": "_run_micro",
+      "filePath": "src/baicode/graph/builder.py",
+      "summary": "编译并调用一次微图 ReAct 循环；超出 retry_limit 抛 ReflectionRetriesExceeded，超出 max_tool_calls 抛 ToolCallBudgetExceeded。",
+      "tags": [
+        "微图",
+        "ReAct",
+        "运行入口"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/baicode/graph/builder.py:run",
+      "type": "function",
+      "name": "run",
+      "filePath": "src/baicode/graph/builder.py",
+      "summary": "宏图公共入口：编译并调用完整 Plan-and-Execute 宏图，返回更新后的 messages 列表。",
+      "tags": [
+        "宏图",
+        "入口函数"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/baicode/graph/nodes.py:agent_node",
+      "type": "function",
+      "name": "agent_node",
+      "filePath": "src/baicode/graph/nodes.py",
+      "summary": "调用 LLM（chat）生成 assistant 消息，规范化 tool_calls，透传 reasoning_content；输出状态增量。",
+      "tags": [
+        "节点",
+        "LLM调用",
+        "agent"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/baicode/graph/nodes.py:tool_node",
+      "type": "function",
+      "name": "tool_node",
+      "filePath": "src/baicode/graph/nodes.py",
+      "summary": "分发并执行工具调用（python_exec/shell_exec/web_search），更新 error_count 与 tool_calls_count。",
+      "tags": [
+        "节点",
+        "工具分发",
+        "tool"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/baicode/graph/planner.py:planner_node",
+      "type": "function",
+      "name": "planner_node",
+      "filePath": "src/baicode/graph/planner.py",
+      "summary": "调用 LLM（submit_plan schema）将用户请求拆解为 0-5 步；含一次重试 + 兜底 fallback；返回 plan 列表。",
+      "tags": [
+        "节点",
+        "Planner",
+        "任务分解"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/baicode/graph/executor.py:executor_node",
+      "type": "function",
+      "name": "executor_node",
+      "filePath": "src/baicode/graph/executor.py",
+      "summary": "从 plan 队首取当前任务，构造隔离 messages 调用 _run_micro，结果写入 history；异常转为 failed 条目。",
+      "tags": [
+        "节点",
+        "Executor",
+        "步骤执行"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/baicode/graph/replanner.py:replanner_node",
+      "type": "function",
+      "name": "replanner_node",
+      "filePath": "src/baicode/graph/replanner.py",
+      "summary": "步骤失败后 LLM 决策：insert_remedy 插入补救步骤或 abort；解析 submit_replan tool call 更新 plan。",
+      "tags": [
+        "节点",
+        "Replanner",
+        "容错"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/baicode/graph/finalizer.py:finalizer_node",
+      "type": "function",
+      "name": "finalizer_node",
+      "filePath": "src/baicode/graph/finalizer.py",
+      "summary": "综合执行历史（history）生成用户友好的最终 Markdown 回复，tools=None 不触发工具调用。",
+      "tags": [
+        "节点",
+        "Finalizer",
+        "最终回复"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/baicode/graph/react.py:react_node",
+      "type": "function",
+      "name": "react_node",
+      "filePath": "src/baicode/graph/react.py",
+      "summary": "0/1 step 纯 ReAct 直通节点：将原始 messages 传入 _run_micro，捕获 ToolCallBudgetExceeded 做 fail-soft 降级。",
+      "tags": [
+        "节点",
+        "ReAct",
+        "直通"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/baicode/tools/python_exec.py:run_python",
+      "type": "function",
+      "name": "run_python",
+      "filePath": "src/baicode/tools/python_exec.py",
+      "summary": "子进程执行 Python 代码：写入临时文件，10 秒超时，返回 {stdout, stderr, returncode}。",
+      "tags": [
+        "工具",
+        "python_exec",
+        "代码执行"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/baicode/tools/shell_exec.py:run_shell",
+      "type": "function",
+      "name": "run_shell",
+      "filePath": "src/baicode/tools/shell_exec.py",
+      "summary": "独立 shell 子进程执行命令：60 秒超时，输出截断 4000 字，返回 {stdout, stderr, returncode}。",
+      "tags": [
+        "工具",
+        "shell_exec",
+        "命令执行"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/baicode/tools/web_search.py:web_search",
+      "type": "function",
+      "name": "web_search",
+      "filePath": "src/baicode/tools/web_search.py",
+      "summary": "Tavily API 搜索：Top-5，4000 字硬截断，支持 news 时效过滤；返回格式化文本结果。",
+      "tags": [
+        "工具",
+        "Tavily",
+        "搜索"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/baicode/cli.py:main",
+      "type": "function",
+      "name": "main",
+      "filePath": "src/baicode/cli.py",
+      "summary": "REPL 主循环：prompt_toolkit 输入 -> 调 graph.run -> 打字机渲染输出，处理各类异常与 Ctrl+C 三级中断。",
+      "tags": [
+        "入口",
+        "REPL",
+        "主循环"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:src/baicode/cli.py:_build_system_prompt",
+      "type": "function",
+      "name": "_build_system_prompt",
+      "filePath": "src/baicode/cli.py",
+      "summary": "构建系统提示词：注入今日日期与 shell_exec 使用约束模板。",
+      "tags": [
+        "系统提示词",
+        "模板"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:src/baicode/cli.py:render_typewriter",
+      "type": "function",
+      "name": "render_typewriter",
+      "filePath": "src/baicode/cli.py",
+      "summary": "Rich Live + Markdown 打字机效果渲染：按字符推进，换行时刷新 Markdown 解析，monokai 代码高亮。",
+      "tags": [
+        "渲染",
+        "Rich",
+        "打字机",
+        "Markdown"
+      ],
+      "complexity": "simple"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:src/baicode/cli.py",
+      "target": "function:src/baicode/cli.py:main",
+      "type": "contains",
+      "weight": 1.0,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/cli.py",
+      "target": "function:src/baicode/cli.py:_build_system_prompt",
+      "type": "contains",
+      "weight": 1.0,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/cli.py",
+      "target": "function:src/baicode/cli.py:render_typewriter",
+      "type": "contains",
+      "weight": 1.0,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/config.py",
+      "target": "class:src/baicode/config.py:Config",
+      "type": "contains",
+      "weight": 1.0,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/config.py",
+      "target": "class:src/baicode/config.py:MissingAPIKeyError",
+      "type": "contains",
+      "weight": 1.0,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/config.py",
+      "target": "function:src/baicode/config.py:load_config",
+      "type": "contains",
+      "weight": 1.0,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/llm.py",
+      "target": "class:src/baicode/llm.py:ChatError",
+      "type": "contains",
+      "weight": 1.0,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/llm.py",
+      "target": "class:src/baicode/llm.py:FatalAuthError",
+      "type": "contains",
+      "weight": 1.0,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/llm.py",
+      "target": "function:src/baicode/llm.py:chat",
+      "type": "contains",
+      "weight": 1.0,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/graph/state.py",
+      "target": "class:src/baicode/graph/state.py:AgentState",
+      "type": "contains",
+      "weight": 1.0,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/graph/builder.py",
+      "target": "class:src/baicode/graph/builder.py:ReflectionRetriesExceeded",
+      "type": "contains",
+      "weight": 1.0,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/graph/builder.py",
+      "target": "class:src/baicode/graph/builder.py:ToolCallBudgetExceeded",
+      "type": "contains",
+      "weight": 1.0,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/graph/builder.py",
+      "target": "function:src/baicode/graph/builder.py:_run_micro",
+      "type": "contains",
+      "weight": 1.0,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/graph/builder.py",
+      "target": "function:src/baicode/graph/builder.py:run",
+      "type": "contains",
+      "weight": 1.0,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/graph/nodes.py",
+      "target": "function:src/baicode/graph/nodes.py:agent_node",
+      "type": "contains",
+      "weight": 1.0,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/graph/nodes.py",
+      "target": "function:src/baicode/graph/nodes.py:tool_node",
+      "type": "contains",
+      "weight": 1.0,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/graph/planner.py",
+      "target": "function:src/baicode/graph/planner.py:planner_node",
+      "type": "contains",
+      "weight": 1.0,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/graph/executor.py",
+      "target": "function:src/baicode/graph/executor.py:executor_node",
+      "type": "contains",
+      "weight": 1.0,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/graph/replanner.py",
+      "target": "function:src/baicode/graph/replanner.py:replanner_node",
+      "type": "contains",
+      "weight": 1.0,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/graph/finalizer.py",
+      "target": "function:src/baicode/graph/finalizer.py:finalizer_node",
+      "type": "contains",
+      "weight": 1.0,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/graph/react.py",
+      "target": "function:src/baicode/graph/react.py:react_node",
+      "type": "contains",
+      "weight": 1.0,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/tools/python_exec.py",
+      "target": "function:src/baicode/tools/python_exec.py:run_python",
+      "type": "contains",
+      "weight": 1.0,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/tools/shell_exec.py",
+      "target": "function:src/baicode/tools/shell_exec.py:run_shell",
+      "type": "contains",
+      "weight": 1.0,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/tools/web_search.py",
+      "target": "function:src/baicode/tools/web_search.py:web_search",
+      "type": "contains",
+      "weight": 1.0,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/cli.py",
+      "target": "file:src/baicode/config.py",
+      "type": "imports",
+      "weight": 0.7,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/cli.py",
+      "target": "file:src/baicode/llm.py",
+      "type": "imports",
+      "weight": 0.7,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/cli.py",
+      "target": "file:src/baicode/graph/builder.py",
+      "type": "imports",
+      "weight": 0.7,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/llm.py",
+      "target": "file:src/baicode/config.py",
+      "type": "imports",
+      "weight": 0.7,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/graph/builder.py",
+      "target": "file:src/baicode/graph/nodes.py",
+      "type": "imports",
+      "weight": 0.7,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/graph/builder.py",
+      "target": "file:src/baicode/graph/state.py",
+      "type": "imports",
+      "weight": 0.7,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/graph/nodes.py",
+      "target": "file:src/baicode/llm.py",
+      "type": "imports",
+      "weight": 0.7,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/graph/nodes.py",
+      "target": "file:src/baicode/tools/python_exec.py",
+      "type": "imports",
+      "weight": 0.7,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/graph/nodes.py",
+      "target": "file:src/baicode/tools/shell_exec.py",
+      "type": "imports",
+      "weight": 0.7,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/graph/nodes.py",
+      "target": "file:src/baicode/tools/web_search.py",
+      "type": "imports",
+      "weight": 0.7,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/graph/nodes.py",
+      "target": "file:src/baicode/tools/schemas.py",
+      "type": "imports",
+      "weight": 0.7,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/graph/planner.py",
+      "target": "file:src/baicode/llm.py",
+      "type": "imports",
+      "weight": 0.7,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/graph/planner.py",
+      "target": "file:src/baicode/graph/nodes.py",
+      "type": "imports",
+      "weight": 0.7,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/graph/executor.py",
+      "target": "file:src/baicode/graph/builder.py",
+      "type": "imports",
+      "weight": 0.7,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/graph/executor.py",
+      "target": "file:src/baicode/graph/nodes.py",
+      "type": "imports",
+      "weight": 0.7,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/graph/executor.py",
+      "target": "file:src/baicode/cli.py",
+      "type": "imports",
+      "weight": 0.5,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/graph/replanner.py",
+      "target": "file:src/baicode/llm.py",
+      "type": "imports",
+      "weight": 0.7,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/graph/replanner.py",
+      "target": "file:src/baicode/graph/nodes.py",
+      "type": "imports",
+      "weight": 0.7,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/graph/replanner.py",
+      "target": "file:src/baicode/graph/executor.py",
+      "type": "imports",
+      "weight": 0.7,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/graph/finalizer.py",
+      "target": "file:src/baicode/llm.py",
+      "type": "imports",
+      "weight": 0.7,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/graph/finalizer.py",
+      "target": "file:src/baicode/graph/nodes.py",
+      "type": "imports",
+      "weight": 0.7,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/graph/finalizer.py",
+      "target": "file:src/baicode/graph/executor.py",
+      "type": "imports",
+      "weight": 0.7,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/graph/finalizer.py",
+      "target": "file:src/baicode/cli.py",
+      "type": "imports",
+      "weight": 0.5,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/graph/react.py",
+      "target": "file:src/baicode/graph/builder.py",
+      "type": "imports",
+      "weight": 0.7,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/tools/web_search.py",
+      "target": "file:src/baicode/config.py",
+      "type": "imports",
+      "weight": 0.7,
+      "direction": "forward"
+    },
+    {
+      "source": "file:eval_runner.py",
+      "target": "file:src/baicode/graph/builder.py",
+      "type": "imports",
+      "weight": 0.7,
+      "direction": "forward"
+    },
+    {
+      "source": "file:eval_runner.py",
+      "target": "file:src/baicode/cli.py",
+      "type": "imports",
+      "weight": 0.7,
+      "direction": "forward"
+    },
+    {
+      "source": "function:src/baicode/cli.py:main",
+      "target": "function:src/baicode/config.py:load_config",
+      "type": "calls",
+      "weight": 0.8,
+      "direction": "forward"
+    },
+    {
+      "source": "function:src/baicode/cli.py:main",
+      "target": "function:src/baicode/graph/builder.py:run",
+      "type": "calls",
+      "weight": 0.8,
+      "direction": "forward"
+    },
+    {
+      "source": "function:src/baicode/cli.py:main",
+      "target": "function:src/baicode/cli.py:render_typewriter",
+      "type": "calls",
+      "weight": 0.8,
+      "direction": "forward"
+    },
+    {
+      "source": "function:src/baicode/llm.py:chat",
+      "target": "function:src/baicode/config.py:load_config",
+      "type": "calls",
+      "weight": 0.8,
+      "direction": "forward"
+    },
+    {
+      "source": "function:src/baicode/graph/builder.py:run",
+      "target": "function:src/baicode/graph/builder.py:_run_micro",
+      "type": "calls",
+      "weight": 0.8,
+      "direction": "forward"
+    },
+    {
+      "source": "function:src/baicode/graph/builder.py:_run_micro",
+      "target": "function:src/baicode/graph/nodes.py:agent_node",
+      "type": "calls",
+      "weight": 0.8,
+      "direction": "forward"
+    },
+    {
+      "source": "function:src/baicode/graph/builder.py:_run_micro",
+      "target": "function:src/baicode/graph/nodes.py:tool_node",
+      "type": "calls",
+      "weight": 0.8,
+      "direction": "forward"
+    },
+    {
+      "source": "function:src/baicode/graph/nodes.py:agent_node",
+      "target": "function:src/baicode/llm.py:chat",
+      "type": "calls",
+      "weight": 0.8,
+      "direction": "forward"
+    },
+    {
+      "source": "function:src/baicode/graph/nodes.py:tool_node",
+      "target": "function:src/baicode/tools/python_exec.py:run_python",
+      "type": "calls",
+      "weight": 0.8,
+      "direction": "forward"
+    },
+    {
+      "source": "function:src/baicode/graph/nodes.py:tool_node",
+      "target": "function:src/baicode/tools/shell_exec.py:run_shell",
+      "type": "calls",
+      "weight": 0.8,
+      "direction": "forward"
+    },
+    {
+      "source": "function:src/baicode/graph/nodes.py:tool_node",
+      "target": "function:src/baicode/tools/web_search.py:web_search",
+      "type": "calls",
+      "weight": 0.8,
+      "direction": "forward"
+    },
+    {
+      "source": "function:src/baicode/graph/planner.py:planner_node",
+      "target": "function:src/baicode/llm.py:chat",
+      "type": "calls",
+      "weight": 0.8,
+      "direction": "forward"
+    },
+    {
+      "source": "function:src/baicode/graph/executor.py:executor_node",
+      "target": "function:src/baicode/graph/builder.py:_run_micro",
+      "type": "calls",
+      "weight": 0.8,
+      "direction": "forward"
+    },
+    {
+      "source": "function:src/baicode/graph/executor.py:executor_node",
+      "target": "function:src/baicode/cli.py:_build_system_prompt",
+      "type": "calls",
+      "weight": 0.8,
+      "direction": "forward"
+    },
+    {
+      "source": "function:src/baicode/graph/replanner.py:replanner_node",
+      "target": "function:src/baicode/llm.py:chat",
+      "type": "calls",
+      "weight": 0.8,
+      "direction": "forward"
+    },
+    {
+      "source": "function:src/baicode/graph/finalizer.py:finalizer_node",
+      "target": "function:src/baicode/llm.py:chat",
+      "type": "calls",
+      "weight": 0.8,
+      "direction": "forward"
+    },
+    {
+      "source": "function:src/baicode/graph/finalizer.py:finalizer_node",
+      "target": "function:src/baicode/cli.py:_build_system_prompt",
+      "type": "calls",
+      "weight": 0.8,
+      "direction": "forward"
+    },
+    {
+      "source": "function:src/baicode/graph/react.py:react_node",
+      "target": "function:src/baicode/graph/builder.py:_run_micro",
+      "type": "calls",
+      "weight": 0.8,
+      "direction": "forward"
+    },
+    {
+      "source": "function:src/baicode/tools/web_search.py:web_search",
+      "target": "function:src/baicode/config.py:load_config",
+      "type": "calls",
+      "weight": 0.8,
+      "direction": "forward"
+    },
+    {
+      "source": "function:src/baicode/graph/builder.py:_run_micro",
+      "target": "class:src/baicode/graph/builder.py:ReflectionRetriesExceeded",
+      "type": "depends_on",
+      "weight": 0.6,
+      "direction": "forward"
+    },
+    {
+      "source": "function:src/baicode/graph/builder.py:_run_micro",
+      "target": "class:src/baicode/graph/builder.py:ToolCallBudgetExceeded",
+      "type": "depends_on",
+      "weight": 0.6,
+      "direction": "forward"
+    },
+    {
+      "source": "function:src/baicode/graph/react.py:react_node",
+      "target": "class:src/baicode/graph/builder.py:ToolCallBudgetExceeded",
+      "type": "depends_on",
+      "weight": 0.6,
+      "direction": "forward"
+    },
+    {
+      "source": "function:src/baicode/graph/executor.py:executor_node",
+      "target": "class:src/baicode/graph/builder.py:ReflectionRetriesExceeded",
+      "type": "depends_on",
+      "weight": 0.6,
+      "direction": "forward"
+    },
+    {
+      "source": "function:src/baicode/graph/executor.py:executor_node",
+      "target": "class:src/baicode/graph/builder.py:ToolCallBudgetExceeded",
+      "type": "depends_on",
+      "weight": 0.6,
+      "direction": "forward"
+    },
+    {
+      "source": "function:src/baicode/cli.py:main",
+      "target": "class:src/baicode/graph/builder.py:ReflectionRetriesExceeded",
+      "type": "depends_on",
+      "weight": 0.6,
+      "direction": "forward"
+    },
+    {
+      "source": "function:src/baicode/cli.py:main",
+      "target": "class:src/baicode/graph/builder.py:ToolCallBudgetExceeded",
+      "type": "depends_on",
+      "weight": 0.6,
+      "direction": "forward"
+    },
+    {
+      "source": "function:src/baicode/cli.py:main",
+      "target": "class:src/baicode/llm.py:FatalAuthError",
+      "type": "depends_on",
+      "weight": 0.6,
+      "direction": "forward"
+    },
+    {
+      "source": "function:src/baicode/cli.py:main",
+      "target": "class:src/baicode/llm.py:ChatError",
+      "type": "depends_on",
+      "weight": 0.6,
+      "direction": "forward"
+    },
+    {
+      "source": "function:src/baicode/config.py:load_config",
+      "target": "class:src/baicode/config.py:MissingAPIKeyError",
+      "type": "depends_on",
+      "weight": 0.6,
+      "direction": "forward"
+    },
+    {
+      "source": "function:src/baicode/config.py:load_config",
+      "target": "class:src/baicode/config.py:Config",
+      "type": "depends_on",
+      "weight": 0.6,
+      "direction": "forward"
+    },
+    {
+      "source": "config:pyproject.toml",
+      "target": "file:src/baicode/cli.py",
+      "type": "configures",
+      "weight": 0.6,
+      "direction": "forward"
+    },
+    {
+      "source": "config:.env.example",
+      "target": "file:src/baicode/config.py",
+      "type": "configures",
+      "weight": 0.6,
+      "direction": "forward"
+    },
+    {
+      "source": "config:.vscode/settings.json",
+      "target": "file:src/baicode/cli.py",
+      "type": "configures",
+      "weight": 0.6,
+      "direction": "forward"
+    },
+    {
+      "source": "document:README.md",
+      "target": "file:src/baicode/cli.py",
+      "type": "documents",
+      "weight": 0.5,
+      "direction": "forward"
+    },
+    {
+      "source": "document:README.md",
+      "target": "file:src/baicode/graph/builder.py",
+      "type": "documents",
+      "weight": 0.5,
+      "direction": "forward"
+    },
+    {
+      "source": "document:README.md",
+      "target": "file:eval_runner.py",
+      "type": "documents",
+      "weight": 0.5,
+      "direction": "forward"
+    },
+    {
+      "source": "document:CLAUDE.md",
+      "target": "file:src/baicode/graph/builder.py",
+      "type": "documents",
+      "weight": 0.5,
+      "direction": "forward"
+    },
+    {
+      "source": "document:CLAUDE.md",
+      "target": "file:src/baicode/cli.py",
+      "type": "documents",
+      "weight": 0.5,
+      "direction": "forward"
+    },
+    {
+      "source": "document:memory-bank/architecture.md",
+      "target": "file:src/baicode/graph/builder.py",
+      "type": "documents",
+      "weight": 0.5,
+      "direction": "forward"
+    },
+    {
+      "source": "document:memory-bank/architecture.md",
+      "target": "file:src/baicode/graph/nodes.py",
+      "type": "documents",
+      "weight": 0.5,
+      "direction": "forward"
+    },
+    {
+      "source": "document:memory-bank/eval.md",
+      "target": "file:eval_runner.py",
+      "type": "documents",
+      "weight": 0.5,
+      "direction": "forward"
+    },
+    {
+      "source": "document:memory-bank/tech_stack.md",
+      "target": "file:src/baicode/llm.py",
+      "type": "documents",
+      "weight": 0.5,
+      "direction": "forward"
+    },
+    {
+      "source": "document:memory-bank/implement_plan.md",
+      "target": "file:src/baicode/graph/builder.py",
+      "type": "documents",
+      "weight": 0.5,
+      "direction": "forward"
+    },
+    {
+      "source": "document:memory-bank/progress.md",
+      "target": "file:src/baicode/graph/builder.py",
+      "type": "documents",
+      "weight": 0.5,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/graph/planner.py",
+      "target": "file:src/baicode/graph/executor.py",
+      "type": "related",
+      "weight": 0.5,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/graph/executor.py",
+      "target": "file:src/baicode/graph/replanner.py",
+      "type": "related",
+      "weight": 0.5,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/graph/executor.py",
+      "target": "file:src/baicode/graph/finalizer.py",
+      "type": "related",
+      "weight": 0.5,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/graph/react.py",
+      "target": "file:src/baicode/graph/nodes.py",
+      "type": "related",
+      "weight": 0.5,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/tools/python_exec.py",
+      "target": "file:src/baicode/tools/shell_exec.py",
+      "type": "similar_to",
+      "weight": 0.5,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/tools/python_exec.py",
+      "target": "file:src/baicode/tools/web_search.py",
+      "type": "similar_to",
+      "weight": 0.5,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/tools/schemas.py",
+      "target": "file:src/baicode/tools/python_exec.py",
+      "type": "defines_schema",
+      "weight": 0.5,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/tools/schemas.py",
+      "target": "file:src/baicode/tools/shell_exec.py",
+      "type": "defines_schema",
+      "weight": 0.5,
+      "direction": "forward"
+    },
+    {
+      "source": "file:src/baicode/tools/schemas.py",
+      "target": "file:src/baicode/tools/web_search.py",
+      "type": "defines_schema",
+      "weight": 0.5,
+      "direction": "forward"
+    }
+  ],
+  "layers": [
+    {
+      "id": "layer:cli-repl",
+      "name": "CLI / REPL 层",
+      "description": "用户交互入口：prompt_toolkit 输入、Rich 流式渲染、顶层异常处理。",
+      "nodeIds": [
+        "file:src/baicode/cli.py",
+        "function:src/baicode/cli.py:main",
+        "function:src/baicode/cli.py:_build_system_prompt",
+        "function:src/baicode/cli.py:render_typewriter"
+      ]
+    },
+    {
+      "id": "layer:configuration",
+      "name": "配置层",
+      "description": "环境变量加载、API Key 校验、不可变配置对象；包含构建配置与编辑器配置。",
+      "nodeIds": [
+        "file:src/baicode/config.py",
+        "class:src/baicode/config.py:Config",
+        "class:src/baicode/config.py:MissingAPIKeyError",
+        "function:src/baicode/config.py:load_config",
+        "config:pyproject.toml",
+        "config:.env.example",
+        "config:.gitignore",
+        "config:.vscode/settings.json"
+      ]
+    },
+    {
+      "id": "layer:llm-adapter",
+      "name": "LLM 适配层",
+      "description": "LiteLLM 统一封装：chat() 调用、重试策略、异常分类（可恢复/不可恢复）。",
+      "nodeIds": [
+        "file:src/baicode/llm.py",
+        "function:src/baicode/llm.py:chat",
+        "class:src/baicode/llm.py:ChatError",
+        "class:src/baicode/llm.py:FatalAuthError"
+      ]
+    },
+    {
+      "id": "layer:macro-graph",
+      "name": "宏图层（Plan-and-Execute）",
+      "description": "双层图的外层：Planner 分诊 → Executor 逐步执行 → Replanner 容错 → Finalizer 汇总；路由逻辑与异常类。",
+      "nodeIds": [
+        "file:src/baicode/graph/builder.py",
+        "file:src/baicode/graph/state.py",
+        "file:src/baicode/graph/planner.py",
+        "file:src/baicode/graph/executor.py",
+        "file:src/baicode/graph/replanner.py",
+        "file:src/baicode/graph/finalizer.py",
+        "file:src/baicode/graph/react.py",
+        "file:src/baicode/graph/__init__.py",
+        "class:src/baicode/graph/state.py:AgentState",
+        "class:src/baicode/graph/builder.py:ReflectionRetriesExceeded",
+        "class:src/baicode/graph/builder.py:ToolCallBudgetExceeded",
+        "function:src/baicode/graph/builder.py:_run_micro",
+        "function:src/baicode/graph/builder.py:run",
+        "function:src/baicode/graph/planner.py:planner_node",
+        "function:src/baicode/graph/executor.py:executor_node",
+        "function:src/baicode/graph/replanner.py:replanner_node",
+        "function:src/baicode/graph/finalizer.py:finalizer_node",
+        "function:src/baicode/graph/react.py:react_node"
+      ]
+    },
+    {
+      "id": "layer:micro-graph",
+      "name": "微图层（ReAct + Reflection）",
+      "description": "双层图的内层：agent_node（调用 LLM）与 tool_node（分发执行工具），含 Reflection 错误计数与工具 schema。",
+      "nodeIds": [
+        "file:src/baicode/graph/nodes.py",
+        "file:src/baicode/tools/schemas.py",
+        "function:src/baicode/graph/nodes.py:agent_node",
+        "function:src/baicode/graph/nodes.py:tool_node"
+      ]
+    },
+    {
+      "id": "layer:tools",
+      "name": "工具层",
+      "description": "三个原生工具实现：python_exec（子进程 Python）、shell_exec（子进程 Shell）、web_search（Tavily 搜索）。",
+      "nodeIds": [
+        "file:src/baicode/tools/python_exec.py",
+        "file:src/baicode/tools/shell_exec.py",
+        "file:src/baicode/tools/web_search.py",
+        "file:src/baicode/tools/__init__.py",
+        "function:src/baicode/tools/python_exec.py:run_python",
+        "function:src/baicode/tools/shell_exec.py:run_shell",
+        "function:src/baicode/tools/web_search.py:web_search"
+      ]
+    },
+    {
+      "id": "layer:package-init",
+      "name": "包初始化层",
+      "description": "Python 包入口文件（空文件，用于 Python 包发现）。",
+      "nodeIds": [
+        "file:src/baicode/__init__.py"
+      ]
+    },
+    {
+      "id": "layer:eval",
+      "name": "评测层",
+      "description": "评测套件：45 个 case 覆盖核心功能路径，用真实 API 跑回归。",
+      "nodeIds": [
+        "file:eval_runner.py"
+      ]
+    },
+    {
+      "id": "layer:documentation",
+      "name": "文档层",
+      "description": "项目文档与知识库：README、CLAUDE.md 协作指南、memory-bank 架构/进度/技术栈文档。",
+      "nodeIds": [
+        "document:README.md",
+        "document:CLAUDE.md",
+        "document:memory-bank/architecture.md",
+        "document:memory-bank/eval.md",
+        "document:memory-bank/implement_plan.md",
+        "document:memory-bank/product_requirements_document.md",
+        "document:memory-bank/progress.md",
+        "document:memory-bank/project_analysis.md",
+        "document:memory-bank/tech_stack.md"
+      ]
+    }
+  ],
+  "tour": [
+    {
+      "order": 1,
+      "title": "项目入口：README 概览",
+      "description": "从 README.md 开始，了解 baicode 的设计哲学、核心特性与架构概览图，建立整体认知。",
+      "nodeIds": [
+        "document:README.md"
+      ]
+    },
+    {
+      "order": 2,
+      "title": "配置与启动：config.py",
+      "description": "baicode 启动时首先加载 .env，config.py 的 load_config() 校验 API Key 并返回不可变 Config 实例，是整个系统的基础依赖。",
+      "nodeIds": [
+        "file:src/baicode/config.py",
+        "class:src/baicode/config.py:Config",
+        "function:src/baicode/config.py:load_config"
+      ]
+    },
+    {
+      "order": 3,
+      "title": "LLM 调用层：llm.py",
+      "description": "chat() 是全系统唯一的 LLM 调用点，封装 LiteLLM，处理限流重试，区分可恢复（ChatError）与不可恢复（FatalAuthError）错误。",
+      "nodeIds": [
+        "file:src/baicode/llm.py",
+        "function:src/baicode/llm.py:chat",
+        "class:src/baicode/llm.py:ChatError",
+        "class:src/baicode/llm.py:FatalAuthError"
+      ]
+    },
+    {
+      "order": 4,
+      "title": "REPL 入口：cli.py",
+      "description": "main() 是用户看到的入口：prompt_toolkit 处理多行输入，每轮调用 graph.run()，最终用 render_typewriter 以打字机效果渲染 Markdown 输出。",
+      "nodeIds": [
+        "file:src/baicode/cli.py",
+        "function:src/baicode/cli.py:main",
+        "function:src/baicode/cli.py:render_typewriter"
+      ]
+    },
+    {
+      "order": 5,
+      "title": "图状态：state.py",
+      "description": "AgentState 是贯穿整个 LangGraph 双层图的唯一状态容器，微图字段（messages、error_count）与宏图字段（plan、history）共存于此。",
+      "nodeIds": [
+        "file:src/baicode/graph/state.py",
+        "class:src/baicode/graph/state.py:AgentState"
+      ]
+    },
+    {
+      "order": 6,
+      "title": "微图核心：nodes.py",
+      "description": "agent_node 调 LLM 生成决策，tool_node 执行工具并计入 error_count。_console 单例在此定义，被所有宏图节点共享。",
+      "nodeIds": [
+        "file:src/baicode/graph/nodes.py",
+        "function:src/baicode/graph/nodes.py:agent_node",
+        "function:src/baicode/graph/nodes.py:tool_node"
+      ]
+    },
+    {
+      "order": 7,
+      "title": "三个原生工具",
+      "description": "python_exec（10s 子进程）、shell_exec（60s shell，无状态）、web_search（Tavily Top-5），以及 schemas.py 定义的 function calling schema。",
+      "nodeIds": [
+        "file:src/baicode/tools/python_exec.py",
+        "file:src/baicode/tools/shell_exec.py",
+        "file:src/baicode/tools/web_search.py",
+        "file:src/baicode/tools/schemas.py"
+      ]
+    },
+    {
+      "order": 8,
+      "title": "图构建与微图入口：builder.py",
+      "description": "_run_micro 编译 ReAct 微图并运行；_build_macro_graph 组装宏图；run() 是 CLI 调用的总入口。两个预算异常类也在此定义。",
+      "nodeIds": [
+        "file:src/baicode/graph/builder.py",
+        "function:src/baicode/graph/builder.py:_run_micro",
+        "function:src/baicode/graph/builder.py:run"
+      ]
+    },
+    {
+      "order": 9,
+      "title": "宏图节点：Planner → Executor → Replanner → Finalizer",
+      "description": "Planner 把请求拆成 0-5 步；Executor 逐步调微图执行；Replanner 在失败时决策补救或放弃；Finalizer 综合历史生成最终回复。0/1 step 走 react_node 直通路径。",
+      "nodeIds": [
+        "file:src/baicode/graph/planner.py",
+        "file:src/baicode/graph/executor.py",
+        "file:src/baicode/graph/replanner.py",
+        "file:src/baicode/graph/finalizer.py",
+        "file:src/baicode/graph/react.py"
+      ]
+    },
+    {
+      "order": 10,
+      "title": "评测套件：eval_runner.py",
+      "description": "45 个真实 API case 覆盖 12 章场景（路径分诊、ReAct、Plan、Reflection、Replanner 等），是验证整个系统行为的回归基准。",
+      "nodeIds": [
+        "file:eval_runner.py"
+      ]
+    },
+    {
+      "order": 11,
+      "title": "架构文档：memory-bank",
+      "description": "architecture.md 详细记录双层图设计与 15 条架构偏离；progress.md 追踪每个 Phase 状态；tech_stack.md 说明选型理由。",
+      "nodeIds": [
+        "document:memory-bank/architecture.md",
+        "document:memory-bank/progress.md",
+        "document:memory-bank/tech_stack.md"
+      ]
+    }
+  ]
+}
