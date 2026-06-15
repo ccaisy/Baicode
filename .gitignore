@@ -21,6 +21,11 @@ CLAUDE.md
 .understand-anything/.trash-*/
 
 # ========================
+# codegraph 是一个本地运行的工具，不应该提交
+# ========================
+.codegraph/
+
+# ========================
 # Node.js
 # ========================
 node_modules/
