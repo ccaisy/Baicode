@@ -12,7 +12,10 @@
 | `.env` | 本地真实 Key（**已 .gitignore**） |
 | `.env.example` | 配置模板，列出 `DEEPSEEK_API_KEY` / `TAVILY_API_KEY` / `OPENAI_API_KEY` |
 | `.gitignore` | macOS / Python 工件 + `.env` + `.workspace/`（Phase 2 工具执行临时区） |
-| `memory-bank/` | 项目文档：PRD、技术栈、implement_plan、progress（进度日志）、architecture（本文件） |
+| `README.md` | 对外项目说明：安装、使用、架构概览、工具约束、评测与已知限制 |
+| `docs/banner.png` | README banner 图片资源 |
+| `eval_runner.py` | 真实 LLM 自动化评测脚本，按 `memory-bank/eval.md` 的高价值 case 做路径/内容/耗时断言 |
+| `memory-bank/` | 项目文档：PRD、技术栈、implement_plan、progress、architecture、eval、project_analysis、docs_sync_report |
 | `.venv/` | 开发环境 venv（**已 .gitignore**） |
 | `src/baicode/` | 包代码主体，详见 §2 |
 
@@ -207,7 +210,7 @@ user_input  ──► strip / 空串跳过
 
 ### 2.8 `tools/shell_exec.py` — 本地 Shell 子进程执行器
 
-**角色**：把 LLM 生成的 shell 命令字符串交给 `/bin/sh` 子进程执行，回传 stdout/stderr/returncode 三元组。**纯净、无状态、无持久 CWD**。
+**角色**：把 LLM 生成的 shell 命令字符串交给系统默认 shell 子进程执行，回传 stdout/stderr/returncode 三元组。**纯净、无状态、无持久 CWD**。Unix/macOS 通常是 `/bin/sh`；Windows 是 `cmd.exe`。
 
 #### shell_exec.py 关键导出
 
@@ -221,7 +224,7 @@ user_input  ──► strip / 空串跳过
 
 #### shell_exec.py 行为约定
 
-- 执行命令：`subprocess.run(command, shell=True, capture_output=True, text=True, timeout=60)`。**不显式 `executable=` 参数**，沿用系统默认 `/bin/sh`（POSIX shell，`&&` / `|` / `>` 全支持，但 `[[ ]]` / process substitution 等 bash 拓展不支持）。
+- 执行命令：`subprocess.run(command, shell=True, capture_output=True, text=True, timeout=60)`。**不显式 `executable=` 参数**，沿用系统默认 shell：Unix/macOS 通常为 `/bin/sh`（POSIX shell，`&&` / `|` / `>` 全支持，但 `[[ ]]` / process substitution 等 bash 拓展不支持）；Windows 为 `cmd.exe`。
 - **无持久 CWD**：每次调用都是独立子进程，沿用调用方（`baicode` 启动目录）的 CWD；模型需要在同一条 command 内用 `&&` 串联 `cd`，单条 `cd` 无效（system prompt 已硬约束）。
 - 超时分支：捕获 `subprocess.TimeoutExpired` → `returncode = -1` + `stderr` 末尾追加 `"TIMEOUT after 60s"`；已捕获到的部分 stdout/stderr 保留并照常截断。bytes 类型的部分输出自动 `decode("utf-8", errors="replace")`。
 - 截断策略：stdout 与 stderr **各自独立**应用 `MAX_CHARS = 4000` 上限（详见 progress 偏离 9）。
@@ -245,7 +248,7 @@ user_input  ──► strip / 空串跳过
 | --- | --- | --- |
 | `PYTHON_EXEC_SCHEMA` | `dict` | OpenAI function calling schema，`function.name="python_exec"`，参数 `code: string (required)` |
 | `WEB_SEARCH_SCHEMA` | `dict` | `function.name="web_search"`，参数 `query: string (required)` + `topic: enum["general","news"]` + `days: integer`。description 中明令"时效问题 MUST set topic='news'" |
-| `SHELL_EXEC_SCHEMA` | `dict` | `function.name="shell_exec"`，参数 `command: string (required)`。description 内嵌四条约束：60s 超时 / 输出截断 / cd 隔离（每次调用独立子进程） / 禁交互式命令（vim/less/top/ssh-without-BatchMode） + 安装类命令必须非交互（`-y` / `--yes` / `--quiet` / `DEBIAN_FRONTEND=noninteractive`） |
+| `SHELL_EXEC_SCHEMA` | `dict` | `function.name="shell_exec"`，参数 `command: string (required)`。description 按 `sys.platform` 区分 Windows `cmd.exe` 与 Unix `/bin/sh` 提示，并内嵌四条约束：60s 超时 / 输出截断 / cd 隔离（每次调用独立子进程） / 禁交互式命令 + 安装类命令必须非交互 |
 | `ALL_SCHEMAS` | `list[dict]` | `[PYTHON_EXEC_SCHEMA, WEB_SEARCH_SCHEMA, SHELL_EXEC_SCHEMA]` |
 
 #### schemas.py 行为约定
